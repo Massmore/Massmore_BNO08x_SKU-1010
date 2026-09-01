@@ -1,0 +1,24 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# Arduino IDE
+*.hex
+*.elf
+*.bin
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+test/testrun
+test/*.o

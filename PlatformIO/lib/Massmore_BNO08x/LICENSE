@@ -1,0 +1,36 @@
+MIT License
+
+Copyright (c) 2026 Massmore Biz Co., Ltd. (https://www.massmore.shop)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---------------------------------------------------------------------------
+Protocol documentation credit
+
+The SH-2 / SHTP protocol implemented here is documented by CEVA, Inc.
+(formerly Hillcrest Laboratories) in the following public documents:
+
+  1000-3927  BNO08X Datasheet
+  1000-3625  SH-2 Reference Manual
+  1000-3535  Sensor Hub Transport Protocol
+  1000-4044  BNO080/BNO085 Sensor Calibration Procedure
+  1000-4045  BNO080/BNO085 Tare Function Usage Guide
+
+This library is an independent, clean implementation of those published
+protocols. It contains no CEVA or Bosch source code.
