@@ -2,6 +2,8 @@
 
 Arduino/PlatformIO library สำหรับโมดูล **Massmore Halley BNO085/BNO086** และ BNO08x family ใช้อ่าน quaternion, Euler angles, acceleration, gyroscope, magnetometer, activity/gesture reports รวมถึง calibration, tare, FRS และ UART-RVC
 
+![Massmore Halley V2 BNO085/BNO086 product cover](docs/images/halley-v2-product-cover.png)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](ArduinoIDE/LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](ArduinoIDE/CHANGELOG.md)
 [![Arduino](https://img.shields.io/badge/Arduino-compatible-00979D.svg)](ArduinoIDE)
@@ -14,6 +16,7 @@ Arduino/PlatformIO library สำหรับโมดูล **Massmore Halley B
 - [Overview](#overview)
 - [BNO085 vs BNO086](#bno085-vs-bno086)
 - [Features](#features)
+- [Product images and pinout](#product-images-and-pinout)
 - [Repository structure](#repository-structure)
 - [Hardware notes](#hardware-notes)
 - [Quick Start: ESP32 + I2C](#quick-start-esp32--i2c)
@@ -78,6 +81,38 @@ if (rvc.read(data)) {
 - ใช้หลายอ็อบเจกต์ได้ เช่น เซ็นเซอร์สองตัวที่ `0x4A` และ `0x4B`
 
 อัตรารายงานสูงสุดตาม BNO08X Datasheet: Gyro Rotation Vector 1000 Hz, Rotation/Game RV 400 Hz, accelerometer 500 Hz, gyroscope 400 Hz และ magnetometer 100 Hz ทั้งนี้ไม่ควรเปิดทุก report ที่อัตราสูงสุดพร้อมกัน เพราะยังติดข้อจำกัดแบนด์วิดท์และกำลังประมวลผลของเซ็นเซอร์
+
+## Product images and pinout
+
+ภาพในส่วนนี้เป็นโมดูล **Massmore Halley V2, SKU1010** สำหรับ BNO085/BNO086 ดูรายละเอียดและตัวเลือกสินค้าปัจจุบันได้ที่ [Massmore product page](https://www.massmore.shop/products/2141d3bf-9d0f-4837-badf-a36bcda61638)
+
+### Product overview
+
+![Massmore Halley V2 features and product overview](docs/images/halley-v2-features.png)
+
+![Massmore Halley V2 board close-up](docs/images/halley-v2-closeup.png)
+
+### Pinout
+
+![Massmore Halley V2 BNO08x pinout](docs/images/halley-v2-pinout.png)
+
+สำหรับ I2C ให้ใช้ `SCL`, `SDA`, `3.3V` และ `GND` ที่ Qwiic connector หรือ through-hole pads ด้านล่างของบอร์ด ขา `INT` และ `RST` แนะนำให้ต่อเข้ากับ ESP32 เพื่อให้ data-ready และ reset/recovery ทำงานได้สมบูรณ์ ส่วน `PS0`, `PS1`, `CS` และ `ADDR/MOSI` ใช้สำหรับเลือก interface หรือกำหนดโหมดตามช่วง reset
+
+> **ข้อควรระวัง:** ขา signal ทั้งหมดเป็น logic 3.3V แม้บอร์ดมีขาไฟ `5V` สำหรับวงจรจ่ายไฟ ห้ามป้อน 5V เข้าขา SDA, SCL, INT, RST หรือขาเลือกโหมด
+
+### Dimensions and board views
+
+![Massmore Halley V2 board dimensions](docs/images/halley-v2-dimensions.png)
+
+![Massmore Halley V2 front and back views](docs/images/halley-v2-front-back.png)
+
+ขนาดบอร์ดประมาณ **25.40 × 20.32 mm** ระยะศูนย์กลางรูยึดแนวนอนประมาณ **20.32 mm** และแนวตั้งประมาณ **15.24 mm** ควรตรวจไฟล์ mechanical drawing หรือวัดบอร์ด revision จริงอีกครั้งก่อนออกแบบ enclosure
+
+### ESP32 I2C wiring example
+
+![Massmore Halley V2 connected to ESP32 by I2C](docs/images/halley-v2-esp32-i2c-wiring.png)
+
+ตัวอย่างในภาพใช้ `SDA = GPIO 21`, `SCL = GPIO 22`, ไฟ 3.3V และกราวด์ร่วม ค่า address เริ่มต้นของ Massmore Halley BNO085/BNO086 คือ `0x4A`; หากไม่พบอุปกรณ์ให้ตรวจตำแหน่ง `ADDR/SA0` และลอง `0x4B`
 
 ## Repository structure
 
