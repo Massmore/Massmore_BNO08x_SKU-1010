@@ -1,0 +1,36 @@
+# Operating system metadata
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# PlatformIO and Arduino build output
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+dist/
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.d
+*.dSYM/
+
+# Logs, caches, and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.pyc
+__pycache__/
+.cache/
+
+# Host-side test executable
+PlatformIO/test/testrun
