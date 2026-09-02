@@ -4,6 +4,26 @@ All notable changes to the Massmore BNO08x library.
 Format follows [Keep a Changelog](https://keepachangelog.com/), versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **ตัวอย่างที่ 15 `15_FactoryTest`** — ชุดทดสอบสำหรับสายการผลิต / QC บนบัส I2C
+  (`SDA = GPIO 21`, `SCL = GPIO 22`, 100 kHz) รันเองทันทีหลังบูต ไม่ต้องพิมพ์อะไร
+  ด่านที่ 1 สแกนบัสหา `0x4B` / `0x4A` และเตือนถ้าเจอ `0x28` / `0x29`
+  ซึ่งแปลว่าขา BOOTN ถูกดึงลงจนชิปเข้าโหมด DFU · ด่านที่ 2 อ่าน Product ID (0xF8)
+  แล้วเรียก `verifyChip()` — ถ้าสองด่านนี้ไม่ผ่านจะไม่เข้าโหมด RUN TEST
+  จากนั้นไล่ทดสอบต่ออีก 22 หัวข้อครอบคลุมจุดเด่นของ BNO08x ในโหมด I2C ทั้งหมด
+  (FRS, metadata, oscillator, error queue, soft reset, set/get feature, accel, gyro,
+  mag, rotation vector ทั้งสามชนิด, gravity/linear accel, gyro-integrated RV บนช่อง 5,
+  raw reports, uncalibrated reports, throughput หลาย report พร้อมกัน, เอนจินตรวจจับ
+  เหตุการณ์ 13 ตัว, calibration, tare, sleep/wake และความต่อเนื่องของ timestamp
+  กับ sequence number) แล้วสรุป PASS / FAIL / WARN
+  ทุกหัวข้อพิมพ์บรรทัด `#RESULT,...` และปิดท้ายด้วย `#VERDICT,...` ให้เว็บ parse ต่อได้
+- **โฟลเดอร์ `firmware/`** — เฟิร์มแวร์ของ `15_FactoryTest` ที่คอมไพล์แล้วสำหรับ
+  ESP32 DevKit (WROOM-32, Flash 4 MB) พร้อม `manifest.json` สำหรับ ESP Web Tools
+  ตาราง offset และ SHA-256 ครบ ลูกค้าแฟลชผ่านเว็บแล้วดู Serial Monitor ได้เลย
+
 ## [1.0.1] — 2026-09-01
 
 Corrections found while writing the documentation, all traceable to primary

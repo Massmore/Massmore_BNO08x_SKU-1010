@@ -23,6 +23,7 @@ Arduino/PlatformIO library สำหรับโมดูล **Massmore Halley B
 - [Arduino IDE](#arduino-ide)
 - [PlatformIO](#platformio)
 - [Examples](#examples)
+- [เฟิร์มแวร์สำเร็จรูป](#เฟิร์มแวร์สำเร็จรูป)
 - [Common API](#common-api)
 - [เลือก Rotation Vector](#เลือก-rotation-vector)
 - [Calibration และ Tare](#calibration-และ-tare)
@@ -120,15 +121,16 @@ if (rvc.read(data)) {
 Massmore_BNO08x/
 ├── ArduinoIDE/
 │   ├── src/                     ไลบรารี Arduino
-│   ├── examples/                ตัวอย่าง 14 ชุด
+│   ├── examples/                ตัวอย่าง 15 ชุด
 │   ├── test/                    host-side parser tests
 │   ├── library.properties
 │   └── keywords.txt
-└── PlatformIO/
+├── PlatformIO/
     ├── lib/Massmore_BNO08x/     ไลบรารีแบบ project-local
     ├── src/main.cpp             ตัวอย่างพร้อม build/upload
-    ├── examples/                ตัวอย่าง 14 ชุดแบบ main.cpp
+    ├── examples/                ตัวอย่าง 15 ชุดแบบ main.cpp
     └── platformio.ini           environment สำหรับ ESP32 หลายรุ่น
+└── firmware/                    เฟิร์มแวร์ Factory Test ที่ build แล้ว (.bin แฟลชผ่านเว็บ)
 ```
 
 เลือกแพ็กเกจให้ตรงกับเครื่องมือ:
@@ -293,6 +295,36 @@ pio device monitor -b 115200
 | 12 | `UART_RVC` | heading + acceleration ที่ 100 Hz แบบ one-way stream |
 | 13 | `MultiReportAdvanced` | callback, batching, sleep/wake และหลาย report |
 | 14 | `FRS_Records` | อ่าน/เขียน Flash Record System |
+| 15 | `FactoryTest` | ชุดทดสอบสายการผลิต 24 หัวข้อ พร้อมไฟล์ `.bin` แฟลชผ่านเว็บ |
+
+## เฟิร์มแวร์สำเร็จรูป
+
+โฟลเดอร์ [`firmware/`](firmware/) มีเฟิร์มแวร์ของตัวอย่าง `15_FactoryTest`
+ที่คอมไพล์ไว้แล้วสำหรับ **ESP32 DevKit (WROOM-32, Flash 4 MB)** ลูกค้าที่ไม่มี Arduino IDE
+หรือ VS Code แฟลชผ่านเว็บได้เลย
+
+| ไฟล์ | Offset | ใช้เมื่อ |
+|---|---|---|
+| `firmware/esp32dev/merged-firmware.bin` | `0x0` | ไฟล์เดียวจบ — เหมาะกับ ESP Web Tools และการแฟลชผ่านเว็บ |
+| `firmware/esp32dev/bootloader.bin` | `0x1000` | แฟลชแยกทีละส่วนด้วย `esptool` |
+| `firmware/esp32dev/partitions.bin` | `0x8000` | " |
+| `firmware/esp32dev/boot_app0.bin` | `0xE000` | " |
+| `firmware/esp32dev/firmware.bin` | `0x10000` | " |
+
+โปรแกรมรันเองทันทีหลังบูต ต่อ `SDA = GPIO 21`, `SCL = GPIO 22` แล้วเปิด Serial Monitor
+ที่ 115200 จะเห็นผลไล่ตั้งแต่สแกนบัส I2C ตรวจ address และ Product ID ว่าเป็นของแท้
+ก่อนเข้าโหมด RUN TEST ที่ไล่ทดสอบจุดเด่นของเซ็นเซอร์ครบทุกหัวข้อ แล้วปิดท้ายด้วยป้าย
+PASS / FAIL
+
+ทุกหัวข้อพิมพ์บรรทัดแบบเครื่องอ่านได้ให้เว็บ parse ต่อ
+
+```
+#RESULT,<ลำดับ>,<ชื่อหัวข้อ>,<PASS|FAIL|WARN>,<รายละเอียด>
+#VERDICT,<PASS|FAIL>,<passed>,<failed>,<warned>
+```
+
+รายละเอียดครบ (ตาราง offset, SHA-256, ตัวอย่างโค้ดฝั่งเว็บ, วิธีสร้างไฟล์ใหม่)
+อยู่ที่ [`firmware/README.md`](firmware/README.md)
 
 ## Common API
 

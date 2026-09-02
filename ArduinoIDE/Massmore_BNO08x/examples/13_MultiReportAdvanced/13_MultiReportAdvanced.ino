@@ -32,8 +32,8 @@
 
 MassmoreBNO08x imu;
 
-volatile uint32_t quatCount = 0;
-volatile uint32_t accelCount = 0;
+uint32_t quatCount = 0;
+uint32_t accelCount = 0;
 uint32_t lastPrint = 0;
 
 // The callback runs inside update(), from your own loop() context — it is not

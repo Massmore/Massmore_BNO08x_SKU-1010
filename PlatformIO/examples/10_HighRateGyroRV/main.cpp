@@ -31,7 +31,7 @@
 
 MassmoreBNO08x imu;
 
-volatile uint32_t sampleCount = 0;
+uint32_t sampleCount = 0;
 uint32_t lastReport = 0;
 
 void setup() {

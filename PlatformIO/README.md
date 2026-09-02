@@ -181,6 +181,7 @@ void loop() {
 | 12 | `UART_RVC` | โหมดสายเดียว 100 Hz |
 | 13 | `MultiReportAdvanced` | 10 reports พร้อมกัน + callback + batching + sleep/wake |
 | 14 | `FRS_Records` | อ่าน/เขียน flash records ของเซ็นเซอร์ |
+| 15 | `FactoryTest` | ทดสอบบอร์ดครบทุกฟีเจอร์ในโหมด I2C แล้วสรุป PASS/FAIL |
 
 ---
 

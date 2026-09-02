@@ -23,6 +23,9 @@ dist/
 *.d
 *.dSYM/
 
+# ยกเว้นเฟิร์มแวร์ที่ตั้งใจ commit ขึ้น repo (ใช้แฟลชผ่านเว็บ)
+!firmware/**/*.bin
+
 # Logs, caches, and temporary files
 *.log
 *.tmp

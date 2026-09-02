@@ -43,7 +43,9 @@ void setup() {
 #else
   Wire.begin();
 #endif
-  Wire.setClock(400000);   // the BNO08x is happy at 400 kHz
+  // Start at 100 kHz. The BNO08x stretches the clock, and ESP32 and RP2040
+  // hosts are widely reported to drop bytes at 400 kHz. Raise it later.
+  Wire.setClock(100000);
 
   if (!imu.begin(MASSMORE_BNO08X_I2C_ADDR_DEF, Wire, INT_PIN, RST_PIN)) {
     Serial.print(F("BNO08x not found: "));

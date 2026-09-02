@@ -57,7 +57,7 @@ copy โฟลเดอร์นี้ไปวางที่:
 
 **File → Examples → Massmore_BNO08x → 01_BasicRotationVector**
 
-มีตัวอย่างให้ 14 ชุด เริ่มจาก 01 ก่อน
+มีตัวอย่างให้ 15 ชุด เริ่มจาก 01 ก่อน
 
 ### ตั้งค่าบอร์ด ESP32 core 3.x
 
@@ -176,6 +176,7 @@ void loop() {
 | 12 | `UART_RVC` | โหมดสายเดียว 100 Hz |
 | 13 | `MultiReportAdvanced` | 10 reports พร้อมกัน + callback + batching + sleep/wake |
 | 14 | `FRS_Records` | อ่าน/เขียน flash records ของเซ็นเซอร์ |
+| 15 | `FactoryTest` | ทดสอบบอร์ดครบทุกฟีเจอร์ในโหมด I2C แล้วสรุป PASS/FAIL |
 
 ---
 
