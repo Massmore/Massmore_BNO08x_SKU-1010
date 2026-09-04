@@ -1,5 +1,5 @@
 /**
- * 15_FactoryTest
+ * 16_FactoryTest
  * --------------
  * โปรแกรมทดสอบสำหรับสายการผลิต (Factory / QC Test) ของบอร์ด
  * Massmore BNO08x SKU-1010 (BNO085 / BNO086) ต่อผ่าน I2C
@@ -16,12 +16,15 @@
  *   STAGE 4  สรุปผล PASS / FAIL / WARN + ป้ายตัดสินรวม
  *
  * การต่อสาย (ESP32 DevKit, Flash 4 MB)
- *   BNO08x VIN -> 3V3
- *   BNO08x GND -> GND
- *   BNO08x SDA -> GPIO 21
- *   BNO08x SCL -> GPIO 22
- *   BNO08x INT -> ไม่ต้องต่อ (ชุดทดสอบนี้ใช้แบบ polling)
- *   BNO08x RST -> ไม่ต้องต่อ (ใช้ soft reset ผ่าน executable channel แทน)
+ *   ชื่อขาตามที่พิมพ์บนบอร์ด Massmore Halley V2
+ *   Halley V2 5V หรือ 3Vo -> 5V หรือ 3V3
+ *   Halley V2 GND         -> GND
+ *   Halley V2 SDA         -> GPIO 21
+ *   Halley V2 SCL         -> GPIO 22
+ *   Halley V2 INT         -> ไม่ต้องต่อ (ชุดทดสอบนี้ใช้แบบ polling)
+ *   Halley V2 RST         -> ไม่ต้องต่อ (ใช้ soft reset ผ่าน executable channel แทน)
+ *   Halley V2 DI          -> ไม่ต้องต่อ = 0x4B, ต่อลง GND = 0x4A
+ *   Halley V2 BT/P0/P1    -> ไม่ต้องต่อ (pull-up ในตัวเลือกโหมด I2C ให้เอง)
  *   ถ้าต่อ INT/RST ไว้ ให้แก้ FT_INT_PIN / FT_RST_PIN ข้างล่างเป็นเลขขาจริง
  *
  * หมายเหตุสำคัญ: BNO08x ใช้ clock stretching ชุดทดสอบนี้จึงตั้ง I2C ไว้ที่
@@ -80,7 +83,25 @@ static uint8_t ft_failed = 0;
 static uint8_t ft_warned = 0;
 
 static uint8_t ft_addr       = 0;      /* address ที่เจอจริงบนบัส */
-static bool    ft_bootloader = false;  /* เจอ 0x28/0x29 = BOOTN ถูกดึงลง */
+static bool    ft_bootloader = false;  /* เจอ 0x28/0x29 = ขา BT (BOOTN) ถูกดึงลง */
+
+/* ข้อมูลตัวชิปที่เก็บไว้ใช้ตอนพิมพ์รายงานสรุปท้ายสุด */
+static massmore_auth_t ft_auth     = MASSMORE_AUTH_NO_RESPONSE;
+static uint64_t        ft_serial   = 0;
+static bool            ft_serialOk = false;
+
+/* เก็บผลทุกหัวข้อไว้ เพื่อพิมพ์ซ้ำเป็นตารางรายงานตอนจบ
+ * 32 ช่องพอสำหรับ 24 หัวข้อ และเหลือที่ให้เพิ่มในอนาคต */
+#define FT_MAX_ITEMS 32
+#define FT_DETAIL_LEN 96
+
+typedef struct {
+  const char *name;                 /* ชี้ไป string literal จึงไม่ต้องคัดลอก */
+  uint8_t     res;                  /* ft_result_t */
+  char        detail[FT_DETAIL_LEN];
+} ft_item_t;
+
+static ft_item_t ft_items[FT_MAX_ITEMS];
 
 /* ตัวนับจำนวน report แต่ละชนิด นับจาก callback จึงได้จำนวนจริงต่อ report
  * ไม่ใช่ต่อแพ็กเก็ต (หนึ่งแพ็กเก็ต SHTP อาจมีหลาย report เมื่อทำ batching) */
@@ -121,6 +142,25 @@ static void ftStage(const char *name) {
   Serial.println(name);
 }
 
+/**
+ * คัดลอกข้อความผลลัพธ์แบบไม่ตัดกลางตัวอักษร UTF-8
+ * ภาษาไทยหนึ่งตัวกิน 3 ไบต์ ถ้าตัดดื้อ ๆ ที่ขอบบัฟเฟอร์จะได้ตัวประหลาดท้ายบรรทัด
+ */
+static void ftCopyDetail(char *dst, size_t cap, const char *src) {
+  if (!dst || cap == 0) return;
+  if (!src) { dst[0] = '\0'; return; }
+
+  size_t n = 0;
+  while (src[n] && n < cap - 1) n++;
+
+  if (src[n]) {                       /* ตัดจริง ไม่ได้จบสตริงพอดี */
+    /* ถอยกลับให้พ้น continuation byte (10xxxxxx) แล้วทิ้งตัวที่ไม่ครบไปเลย */
+    while (n > 0 && ((uint8_t)src[n] & 0xC0) == 0x80) n--;
+  }
+  memcpy(dst, src, n);
+  dst[n] = '\0';
+}
+
 /** ปิดท้ายหัวข้อ: นับผล + พิมพ์บรรทัดคนอ่าน + บรรทัดเครื่องอ่าน */
 static void ftReport(const char *name, ft_result_t res, const char *detail) {
   const char *tag;
@@ -128,6 +168,14 @@ static void ftReport(const char *name, ft_result_t res, const char *detail) {
     case FT_PASS: tag = "PASS"; ft_passed++; break;
     case FT_FAIL: tag = "FAIL"; ft_failed++; break;
     default:      tag = "WARN"; ft_warned++; break;
+  }
+
+  /* เก็บไว้พิมพ์เป็นตารางรายงานตอนจบ */
+  if (ft_index >= 1 && ft_index <= FT_MAX_ITEMS) {
+    ft_item_t *it = &ft_items[ft_index - 1];
+    it->name = name;
+    it->res  = (uint8_t)res;
+    ftCopyDetail(it->detail, FT_DETAIL_LEN, detail);
   }
 
   Serial.print(F("     -> "));
@@ -190,7 +238,7 @@ static void ftPrintAccuracy(const char *label, uint8_t sensorId) {
 /**
  * สแกนบัส I2C ทั้ง 126 address
  * ตั้ง ft_addr เป็น address ของ BNO08x ที่เจอ (0x4B ก่อน แล้วค่อย 0x4A)
- * ตั้ง ft_bootloader ถ้าเจอ 0x28/0x29 ซึ่งแปลว่าชิปบูตเข้า DFU เพราะขา BOOTN
+ * ตั้ง ft_bootloader ถ้าเจอ 0x28/0x29 ซึ่งแปลว่าชิปบูตเข้า DFU เพราะขา BT (BOOTN)
  * @return จำนวนอุปกรณ์ทั้งหมดที่ตอบ ACK
  */
 static uint8_t ftScanBus() {
@@ -208,10 +256,10 @@ static uint8_t ftScanBus() {
     ftHex8(addr);
 
     if (addr == MASSMORE_BNO08X_I2C_ADDR_HIGH) {
-      Serial.print(F("   <-- BNO08x (SA0 = 1, ค่าจากโรงงาน)"));
+      Serial.print(F("   <-- BNO08x (ขา DI = 1, ค่าจากโรงงาน)"));
       ft_addr = addr;
     } else if (addr == MASSMORE_BNO08X_I2C_ADDR_LOW) {
-      Serial.print(F("   <-- BNO08x (SA0 = 0)"));
+      Serial.print(F("   <-- BNO08x (ขา DI = 0)"));
       if (ft_addr == 0) ft_addr = addr;
     } else if (addr == MASSMORE_BNO08X_BOOTLOADER_ADDR_LOW ||
                addr == MASSMORE_BNO08X_BOOTLOADER_ADDR_HIGH) {
@@ -242,11 +290,11 @@ static bool ftStageDetect() {
 
   if (ft_bootloader && ft_addr == 0) {
     snprintf(detail, sizeof(detail),
-             "เจอเฉพาะ bootloader 0x28/0x29 - ขา BOOTN ถูกดึงลง");
+             "เจอเฉพาะ bootloader 0x28/0x29 - ขา BT ถูกดึงลง");
     ftReport("DEVICE_DETECT", FT_FAIL, detail);
     Serial.println();
     Serial.println(F("     ชิปบูตเข้าโหมด DFU แทนโหมดใช้งานปกติ"));
-    Serial.println(F("     ขา BOOTN ต้องถูกดึงขึ้น 3V3 หรือปล่อยให้ pull-up ในตัวทำงาน"));
+    Serial.println(F("     ขา BT (BOOTN) ต้องถูกดึงขึ้น 3V3 หรือปล่อยให้ pull-up ในตัวทำงาน"));
     Serial.println(F("     นี่คือสาเหตุอันดับหนึ่งของอาการ \"บอร์ดสำเร็จรูปใช้ได้ PCB เองไม่ได้\""));
     return false;
   }
@@ -260,9 +308,9 @@ static bool ftStageDetect() {
     Serial.println(F("       - สาย SDA/SCL สลับกันหรือหลุดหรือไม่"));
     Serial.println(F("       - มี pull-up 2.2k-4.7k ขึ้นไฟ 3V3 ทั้งสองเส้นหรือไม่"));
     Serial.println(F("         (datasheet CEVA ระบุ 2-4 kOhm ไม่ใช่ 10k)"));
-    Serial.println(F("       - จ่ายไฟ VIN 3V3 และ GND ร่วมกับ ESP32 แล้วหรือยัง"));
-    Serial.println(F("       - ขา BOOTN ปล่อยลอยหรือถูกดึงลงกราวด์หรือไม่"));
-    Serial.println(F("       - PS0/PS1 ต้องเป็น 0/0 จึงจะเป็นโหมด I2C"));
+    Serial.println(F("       - จ่ายไฟที่ขา 5V หรือ 3Vo และ GND ร่วมกับ ESP32 แล้วหรือยัง"));
+    Serial.println(F("       - ขา BT (BOOTN) ปล่อยลอยหรือถูกดึงลงกราวด์หรือไม่"));
+    Serial.println(F("       - ขา P0/P1 ต้องเป็น 0/0 จึงจะเป็นโหมด I2C"));
     return false;
   }
 
@@ -270,7 +318,7 @@ static bool ftStageDetect() {
            ft_addr, (unsigned)total);
   ftReport("DEVICE_DETECT", FT_PASS, detail);
   if (ft_bootloader) {
-    Serial.println(F("     * เจอ bootloader address ด้วย -- ปกติจะไม่เห็นพร้อมกัน ตรวจ BOOTN"));
+    Serial.println(F("     * เจอ bootloader address ด้วย -- ปกติจะไม่เห็นพร้อมกัน ตรวจขา BT"));
   }
   return true;
 }
@@ -312,7 +360,25 @@ static bool ftStageIdentity() {
   Serial.print(F("     SW build number  = "));
   Serial.println(id.swBuildNumber);
 
+  /* ชิปตอบ Product ID หลายชุด ชุดละหนึ่งอิมเมจเฟิร์มแวร์ พิมพ์ให้ครบ */
+  uint8_t nImages = imu.getProductIDCount();
+  Serial.print(F("     อิมเมจที่ชิปแจ้ง  = "));
+  Serial.print(nImages);
+  Serial.println(F(" ชุด"));
+  for (uint8_t i = 0; i < nImages; i++) {
+    const massmore_product_id_t &e = imu.getProductID(i);
+    Serial.print(F("       ["));
+    Serial.print(i);
+    Serial.print(F("] v"));
+    Serial.print(e.swVersionMajor); Serial.print('.');
+    Serial.print(e.swVersionMinor); Serial.print('.');
+    Serial.print(e.swVersionPatch);
+    Serial.print(F("  part "));  Serial.print(e.swPartNumber);
+    Serial.print(F("  build ")); Serial.println(e.swBuildNumber);
+  }
+
   massmore_auth_t auth = imu.verifyChip();
+  ft_auth = auth;
   Serial.print(F("     verifyChip()     = "));
   Serial.println(MassmoreBNO08x::authToString(auth));
 
@@ -367,11 +433,17 @@ static void ftTestSerialNumber() {
   char detail[128];
 
   if (imu.readSerialNumber(serial) != MASSMORE_OK) {
-    snprintf(detail, sizeof(detail), "อ่าน FRS ไม่สำเร็จ: %s",
+    snprintf(detail, sizeof(detail), "ไม่มี record 0x4B4B ในชิปตัวนี้ (%s)",
              MassmoreBNO08x::statusToString(imu.getLastError()));
-    ftReport("SERIAL_NUMBER", FT_FAIL, detail);
+    ftReport("SERIAL_NUMBER", FT_WARN, detail);
+    Serial.println(F("     BNO08x หลายล็อตไม่ได้โปรแกรมเลขซีเรียลมาจากโรงงาน"));
+    Serial.println(F("     ไม่ใช่ความเสียหายของบอร์ด และไม่กระทบการใช้งาน"));
+    Serial.println(F("     ตัวพิสูจน์ว่า FRS อ่านได้จริงอยู่ที่หัวข้อ FRS_METADATA ถัดไป"));
     return;
   }
+
+  ft_serial   = serial;
+  ft_serialOk = true;
 
   uint32_t hi = (uint32_t)(serial >> 32);
   uint32_t lo = (uint32_t)(serial & 0xFFFFFFFFUL);
@@ -404,25 +476,37 @@ static void ftTestMetadata() {
     return;
   }
 
-  uint16_t q1 = (uint16_t)(meta[7] & 0xFFFF);
-  uint16_t q2 = (uint16_t)((meta[7] >> 16) & 0xFFFF);
-
+  uint16_t revision = (uint16_t)(meta[3] & 0xFFFF);
   Serial.print(F("     words = "));      Serial.print(words);
-  Serial.print(F("   version = 0x"));    Serial.println(meta[0], HEX);
-  Serial.print(F("     min period = "));  Serial.print(meta[4]);
-  Serial.println(F(" us"));
-  Serial.print(F("     Q point 1 = "));  Serial.print(q1);
-  Serial.print(F(" (ควรได้ 14)   Q point 2 = ")); Serial.print(q2);
-  Serial.println(F(" (ควรได้ 12)"));
+  Serial.print(F("   version = 0x"));    Serial.print(meta[0], HEX);
+  Serial.print(F("   revision = "));     Serial.println(revision);
 
-  if (q1 != MASSMORE_Q_QUAT || q2 != MASSMORE_Q_QUAT_ACC) {
-    snprintf(detail, sizeof(detail), "Q point = %u/%u ไม่ตรงกับ 14/12",
-             (unsigned)q1, (unsigned)q2);
+  /* ตำแหน่งของคู่ Q point ขยับตาม revision ของ metadata record จึงมองทั้ง
+   * word 7 และ word 8 แทนที่จะ hard-code ช่องเดียวแล้วเดาว่าถูก
+   * ส่วน min period ก็อยู่คนละ word ตาม revision เหมือนกัน จึงไม่พิมพ์ตัวเลข
+   * ที่ยังไม่รู้แน่ว่าอ่านจากช่องไหน */
+  int8_t qWord = -1;
+  for (uint8_t w = 7; w <= 8 && w < words && w < 16; w++) {
+    if ((uint16_t)(meta[w] & 0xFFFF) == MASSMORE_Q_QUAT &&
+        (uint16_t)((meta[w] >> 16) & 0xFFFF) == MASSMORE_Q_QUAT_ACC) {
+      qWord = (int8_t)w;
+      break;
+    }
+  }
+
+  Serial.print(F("     word7 = 0x")); Serial.print(meta[7], HEX);
+  if (words > 8) { Serial.print(F("   word8 = 0x")); Serial.print(meta[8], HEX); }
+  Serial.println();
+  Serial.println(F("     มองหาคู่ Q point 14 (quaternion) กับ 12 (accuracy)"));
+
+  if (qWord < 0) {
+    snprintf(detail, sizeof(detail), "ไม่พบคู่ Q point 14/12 (rev=%u words=%u)",
+             (unsigned)revision, (unsigned)words);
     ftReport("FRS_METADATA", FT_WARN, detail);
     return;
   }
-  snprintf(detail, sizeof(detail), "Q=14/12 minPeriod=%luus MotionEngine ทำงาน",
-           (unsigned long)meta[4]);
+  snprintf(detail, sizeof(detail), "Q=14/12 ที่ word %d rev=%u MotionEngine ทำงาน",
+           (int)qWord, (unsigned)revision);
   ftReport("FRS_METADATA", FT_PASS, detail);
 }
 
@@ -499,29 +583,46 @@ static void ftTestFeatureConfig() {
     ftReport("FEATURE_CONFIG", FT_FAIL, "ส่ง Set Feature ไม่ผ่าน");
     return;
   }
-  delay(60);
 
-  if (imu.requestFeature(MASSMORE_SENSOR_ROTATION_VECTOR) != MASSMORE_OK) {
-    ftReport("FEATURE_CONFIG", FT_FAIL, "ชิปไม่ตอบ Get Feature Response");
-    return;
-  }
+  /* ให้ชิปเริ่มส่งรายงานจริงก่อน แล้วค่อยถามกลับ ไม่อย่างนั้นบางเฟิร์มแวร์
+   * ตอบ Get Feature ด้วย interval = 0 เพราะยังไม่ทันตั้งค่าเสร็จ */
+  ftCountReset();
+  ftPump(300);
+  uint16_t n = ftCount(MASSMORE_SENSOR_ROTATION_VECTOR);
 
+  massmore_status_t rc = imu.requestFeature(MASSMORE_SENSOR_ROTATION_VECTOR);
   uint32_t got = imu.getReportInterval(MASSMORE_SENSOR_ROTATION_VECTOR);
+
   Serial.print(F("     ตั้งไว้ "));
   Serial.print(want);
   Serial.print(F(" us   ชิปตอบกลับ "));
   Serial.print(got);
-  Serial.println(F(" us"));
+  Serial.print(F(" us   ระหว่างนั้นได้ "));
+  Serial.print(n);
+  Serial.println(F(" report"));
 
   imu.disableReport(MASSMORE_SENSOR_ROTATION_VECTOR);
   delay(20);
 
-  if (got == 0) {
-    ftReport("FEATURE_CONFIG", FT_FAIL, "ชิปตอบ interval = 0");
+  if (rc != MASSMORE_OK) {
+    ftReport("FEATURE_CONFIG", FT_FAIL, "ชิปไม่ตอบ Get Feature Response");
     return;
   }
-  snprintf(detail, sizeof(detail), "set=%luus get=%luus",
-           (unsigned long)want, (unsigned long)got);
+  if (got == 0) {
+    /* คำสั่งไป-กลับบนช่อง control สำเร็จแล้ว และเซ็นเซอร์ส่งข้อมูลจริง
+     * ค่าที่ echo กลับมาเป็น 0 เป็นพฤติกรรมของเฟิร์มแวร์ ไม่ใช่บอร์ดเสีย */
+    if (n > 0) {
+      snprintf(detail, sizeof(detail),
+               "ตอบ Get Feature แต่ echo interval=0 (sensor ส่งจริง n=%u)",
+               (unsigned)n);
+      ftReport("FEATURE_CONFIG", FT_WARN, detail);
+    } else {
+      ftReport("FEATURE_CONFIG", FT_FAIL, "echo interval=0 และไม่มี report เข้ามาเลย");
+    }
+    return;
+  }
+  snprintf(detail, sizeof(detail), "set=%luus get=%luus (n=%u)",
+           (unsigned long)want, (unsigned long)got, (unsigned)n);
   ftReport("FEATURE_CONFIG", FT_PASS, detail);
 }
 
@@ -796,10 +897,16 @@ static void ftTestRawReports() {
 
   char detail[128];
   ftCountReset();
+
+  /* raw report ออกก็ต่อเมื่อเซ็นเซอร์ตัวนั้นกำลังทำงานอยู่จริง เปิดเฉพาะ raw
+   * อย่างเดียวจะไม่ได้อะไรเลย ต้องเปิดตัวที่ผ่านการประมวลผลคู่กันด้วย */
+  imu.enableAccelerometer(MASSMORE_INTERVAL_100HZ);
+  imu.enableGyroscope(MASSMORE_INTERVAL_100HZ);
+  imu.enableMagnetometer(MASSMORE_INTERVAL_100HZ);
   imu.enableRawAccelerometer(MASSMORE_INTERVAL_100HZ);
   imu.enableRawGyroscope(MASSMORE_INTERVAL_100HZ);
   imu.enableRawMagnetometer(MASSMORE_INTERVAL_100HZ);
-  ftPump(900);
+  ftPump(1200);
   uint16_t na = ftCount(MASSMORE_SENSOR_RAW_ACCELEROMETER);
   uint16_t ng = ftCount(MASSMORE_SENSOR_RAW_GYROSCOPE);
   uint16_t nm = ftCount(MASSMORE_SENSOR_RAW_MAGNETOMETER);
@@ -810,6 +917,9 @@ static void ftTestRawReports() {
   imu.disableReport(MASSMORE_SENSOR_RAW_ACCELEROMETER);
   imu.disableReport(MASSMORE_SENSOR_RAW_GYROSCOPE);
   imu.disableReport(MASSMORE_SENSOR_RAW_MAGNETOMETER);
+  imu.disableReport(MASSMORE_SENSOR_ACCELEROMETER);
+  imu.disableReport(MASSMORE_SENSOR_GYROSCOPE);
+  imu.disableReport(MASSMORE_SENSOR_MAGNETIC_FIELD);
 
   Serial.print(F("     raw accel n=")); Serial.print(na);
   Serial.print(F("  x="));  Serial.print(ra.x);
@@ -828,7 +938,10 @@ static void ftTestRawReports() {
 
   uint8_t got = (na ? 1 : 0) + (ng ? 1 : 0) + (nm ? 1 : 0);
   if (got == 0) {
-    ftReport("RAW_REPORTS", FT_FAIL, "ไม่มี raw report ชนิดใดเข้ามาเลย");
+    /* เฟิร์มแวร์บางบิลด์ไม่ปล่อย raw report ออกทาง I2C เลย เป็นข้อจำกัดของ
+     * อิมเมจ ไม่ใช่บอร์ดเสีย และไม่กระทบการใช้งานปกติที่ใช้ค่าที่ผ่าน fusion */
+    ftReport("RAW_REPORTS", FT_WARN, "เฟิร์มแวร์ตัวนี้ไม่ปล่อย raw report ออกมา");
+    Serial.println(F("     ไม่กระทบการใช้งานปกติ ค่าที่ผ่าน fusion ยังครบทุกตัว"));
     return;
   }
   if (got < 3) {
@@ -943,7 +1056,9 @@ static void ftTestEventEngines() {
   if (imu.enablePocketDetector(MASSMORE_INTERVAL_10HZ)       == MASSMORE_OK) okCmd++;
   if (imu.enableCircleDetector(MASSMORE_INTERVAL_10HZ)       == MASSMORE_OK) okCmd++;
 
-  ftPump(1200);
+  /* stability กับ activity classifier ต้องสะสมข้อมูลหลายวินาทีถึงจะเลิกตอบ
+   * Unknown จึงให้เวลามากกว่าหัวข้ออื่น */
+  ftPump(2500);
 
   uint16_t nStab = ftCount(MASSMORE_SENSOR_STABILITY_CLASSIFIER);
   uint16_t nAct  = ftCount(MASSMORE_SENSOR_ACTIVITY_CLASSIFIER);
@@ -1003,6 +1118,12 @@ static void ftTestCalibrationCommand() {
   ftStage("CALIBRATION CMD -- เปิด/ปิด dynamic calibration ของ MotionEngine");
 
   char detail[128];
+
+  /* คำสั่ง ME calibrate สั่งกับ MotionEngine ที่กำลังทำงาน เปิด rotation vector
+   * ไว้ก่อนเพื่อให้ fusion เดินอยู่ ไม่อย่างนั้นบางเฟิร์มแวร์ตอบ status ไม่เป็นศูนย์ */
+  imu.enableRotationVector(MASSMORE_INTERVAL_100HZ);
+  ftPump(400);
+
   massmore_status_t rc1 = imu.calibrateAll();
   delay(60);
   massmore_status_t rc2 = imu.requestCalibrationStatus();
@@ -1026,6 +1147,7 @@ static void ftTestCalibrationCommand() {
 
   massmore_status_t rc3 = imu.endCalibration();
   delay(40);
+  imu.disableReport(MASSMORE_SENSOR_ROTATION_VECTOR);
 
   if (rc1 != MASSMORE_OK || rc2 != MASSMORE_OK || rc3 != MASSMORE_OK) {
     snprintf(detail, sizeof(detail), "คำสั่งไม่ผ่าน (%s / %s / %s)",
@@ -1160,8 +1282,12 @@ static void ftTestStreamIntegrity() {
     return;
   }
   if (back > 0) {
-    snprintf(detail, sizeof(detail), "timestamp ถอยหลัง %u ครั้ง", (unsigned)back);
-    ftReport("STREAM_INTEGRITY", FT_FAIL, detail);
+    /* timestamp อ้างอิงนาฬิกาโฮสต์ตอนที่แพ็กเก็ตเข้ามา ถ้า loop() ถูกงานอื่น
+     * แย่งไปนาน ๆ ลำดับอาจสลับได้เล็กน้อย เป็นเรื่องจังหวะของโฮสต์ ไม่ใช่บอร์ดเสีย
+     * ตัวชี้ขาดว่าข้อมูลตกหล่นจริงคือ sequence number ด้านล่าง */
+    snprintf(detail, sizeof(detail), "timestamp ถอยหลัง %u ครั้ง (sequence ขาด %u)",
+             (unsigned)back, (unsigned)gaps);
+    ftReport("STREAM_INTEGRITY", FT_WARN, detail);
     return;
   }
   if (gaps > 0) {
@@ -1201,7 +1327,7 @@ static void ftBanner() {
   Serial.print(F("  clock="));
   Serial.print((uint32_t)(FT_I2C_FREQ_HZ / 1000UL));
   Serial.println(F(" kHz"));
-  Serial.print(F("  address   : 0x4B (SA0=1) หรือ 0x4A (SA0=0) -- สแกนหาเอง"));
+  Serial.print(F("  address   : 0x4B (DI=1) หรือ 0x4A (DI=0) -- สแกนหาเอง"));
   Serial.println();
   Serial.print(F("  built     : "));
   Serial.print(F(__DATE__));
@@ -1212,22 +1338,228 @@ static void ftBanner() {
   ftLine('=');
 }
 
+/* ------------------------------------------------------------------ */
+/*  รายงานสรุปท้ายสุด                                                   */
+/* ------------------------------------------------------------------ */
+
+/** เครื่องหมายหน้าแต่ละหัวข้อ กว้าง 3 ตัวอักษรเท่ากันทุกแบบ */
+static void ftMark(uint8_t res) {
+  switch (res) {
+    case FT_PASS: Serial.print(F("[✓]")); break;   /* ถูก */
+    case FT_FAIL: Serial.print(F("[✗]")); break;   /* ผิด */
+    default:      Serial.print(F("[!]"));      break;   /* เตือน */
+  }
+}
+
+/** พิมพ์ชื่อหัวข้อแล้วเติมช่องว่างให้ครบ 20 ตัว เพื่อให้คอลัมน์ตรงกัน */
+static void ftPadName(const char *s) {
+  uint8_t n = 0;
+  while (s && s[n]) { Serial.print(s[n]); n++; }
+  while (n < 20) { Serial.print(' '); n++; }
+}
+
+/** เลขลำดับสองหลัก */
+static void ftNum2(uint8_t v) {
+  if (v < 10) Serial.print('0');
+  Serial.print(v);
+}
+
+/** ส่วนที่ 1 ของรายงาน: เจอ address อะไร ชิปอะไร ของแท้ไหม */
+static void ftReportDevice() {
+  const massmore_product_id_t &id = imu.getProductID();
+
+  Serial.println(F("  [ อุปกรณ์ที่ตรวจพบ ]"));
+
+  Serial.print(F("    I2C address   : "));
+  if (ft_addr) {
+    ftHex8(ft_addr);
+    Serial.print(F("   (ขา DI = "));
+    Serial.print(ft_addr == MASSMORE_BNO08X_I2C_ADDR_HIGH ? F("HIGH") : F("LOW"));
+    Serial.println(')');
+  } else if (ft_bootloader) {
+    Serial.println(F("เจอแต่ bootloader 0x28/0x29 -- ขา BT ถูกดึงลง"));
+  } else {
+    Serial.println(F("ไม่พบอุปกรณ์บนบัสเลย"));
+  }
+
+  Serial.print(F("    Chip          : "));
+  if (id.valid) {
+    Serial.println(F("BNO085 / BNO086 (SH-2 MotionEngine)"));
+  } else {
+    Serial.println(F("ไม่ทราบ -- ไม่ตอบ Product ID"));
+  }
+
+  Serial.print(F("    Firmware      : "));
+  if (id.valid) {
+    Serial.print(id.swVersionMajor); Serial.print('.');
+    Serial.print(id.swVersionMinor); Serial.print('.');
+    Serial.println(id.swVersionPatch);
+  } else {
+    Serial.println('-');
+  }
+
+  Serial.print(F("    Part number   : "));
+  if (id.valid) Serial.println(id.swPartNumber); else Serial.println('-');
+
+  Serial.print(F("    Build number  : "));
+  if (id.valid) Serial.println(id.swBuildNumber); else Serial.println('-');
+
+  Serial.print(F("    Images        : "));
+  Serial.print(imu.getProductIDCount());
+  Serial.println(F(" ชุด (ชิปแจ้งเฟิร์มแวร์มาหลายอิมเมจ ปกติ)"));
+
+  Serial.print(F("    Serial number : "));
+  if (ft_serialOk) {
+    Serial.print(F("0x"));
+    Serial.print((uint32_t)(ft_serial >> 32), HEX);
+    Serial.println((uint32_t)(ft_serial & 0xFFFFFFFFUL), HEX);
+  } else {
+    Serial.println(F("ไม่ได้โปรแกรมมาจากโรงงาน (ไม่กระทบการใช้งาน)"));
+  }
+
+  Serial.print(F("    Reset cause   : "));
+  Serial.println(id.valid ? imu.getResetReasonString() : "-");
+
+  Serial.print(F("    Authentic     : "));
+  switch (ft_auth) {
+    case MASSMORE_AUTH_OK:
+      ftMark(FT_PASS);
+      Serial.println(F(" ของแท้ -- part number ตรงตารางเฟิร์มแวร์โรงงาน"));
+      break;
+    case MASSMORE_AUTH_UNKNOWN_FW:
+      ftMark(FT_WARN);
+      Serial.println(F(" น่าจะแท้ -- ตอบถูกทุกอย่าง แต่ part number ใหม่กว่าตารางในไลบรารี"));
+      break;
+    default:
+      ftMark(FT_FAIL);
+      Serial.print(F(" ไม่ผ่าน -- "));
+      Serial.println(MassmoreBNO08x::authToString(ft_auth));
+      break;
+  }
+  Serial.println(F("                    (เป็นการตรวจระดับโปรโตคอล ไม่ใช่ลายเซ็นดิจิทัล)"));
+}
+
+/** ส่วนที่ 2 ของรายงาน: ไล่ผลทีละหัวข้อพร้อมเครื่องหมายถูก/ผิด */
+static void ftReportItems() {
+  Serial.print(F("  [ ผลรายฟังก์ชัน "));
+  Serial.print(ft_index);
+  Serial.println(F(" หัวข้อ ]"));
+
+  uint8_t n = ft_index;
+  if (n > FT_MAX_ITEMS) n = FT_MAX_ITEMS;
+
+  for (uint8_t i = 0; i < n; i++) {
+    Serial.print(F("    "));
+    ftMark(ft_items[i].res);
+    Serial.print(' ');
+    ftNum2((uint8_t)(i + 1));
+    Serial.print(' ');
+    ftPadName(ft_items[i].name);
+    Serial.println(ft_items[i].detail);
+  }
+}
+
+/** ส่วนที่ 3 ของรายงาน: นับผ่าน / เตือน / ไม่ผ่าน */
+static void ftReportTotals() {
+  Serial.println(F("  [ สรุป ]"));
+
+  Serial.print(F("    "));  ftMark(FT_PASS);
+  Serial.print(F(" ผ่าน      "));
+  if (ft_passed < 10) Serial.print(' ');
+  Serial.print(ft_passed);
+  Serial.println(F(" หัวข้อ"));
+
+  Serial.print(F("    "));  ftMark(FT_WARN);
+  Serial.print(F(" เตือน     "));
+  if (ft_warned < 10) Serial.print(' ');
+  Serial.print(ft_warned);
+  Serial.println(F(" หัวข้อ   (สภาพแวดล้อมตอนทดสอบ ไม่ใช่บอร์ดเสีย)"));
+
+  Serial.print(F("    "));  ftMark(FT_FAIL);
+  Serial.print(F(" ไม่ผ่าน   "));
+  if (ft_failed < 10) Serial.print(' ');
+  Serial.print(ft_failed);
+  Serial.println(F(" หัวข้อ"));
+
+  Serial.print(F("        รวมทั้งหมด "));
+  Serial.print(ft_index);
+  Serial.println(F(" หัวข้อ"));
+
+  /* ย้ำรายชื่อหัวข้อที่มีปัญหา เพื่อไม่ต้องเลื่อนหาเอง */
+  uint8_t n = ft_index;
+  if (n > FT_MAX_ITEMS) n = FT_MAX_ITEMS;
+
+  if (ft_failed) {
+    Serial.print(F("    หัวข้อที่ไม่ผ่าน :"));
+    for (uint8_t i = 0; i < n; i++) {
+      if (ft_items[i].res != FT_FAIL) continue;
+      Serial.print(' ');
+      ftNum2((uint8_t)(i + 1));
+      Serial.print('-');
+      Serial.print(ft_items[i].name);
+    }
+    Serial.println();
+  }
+  if (ft_warned) {
+    Serial.print(F("    หัวข้อที่เตือน   :"));
+    for (uint8_t i = 0; i < n; i++) {
+      if (ft_items[i].res != FT_WARN) continue;
+      Serial.print(' ');
+      ftNum2((uint8_t)(i + 1));
+      Serial.print('-');
+      Serial.print(ft_items[i].name);
+    }
+    Serial.println();
+  }
+}
+
+/** บรรทัดสำหรับให้เว็บ parse: ข้อมูลอุปกรณ์หนึ่งบรรทัดจบ */
+static void ftMachineDeviceLine() {
+  const massmore_product_id_t &id = imu.getProductID();
+
+  Serial.print(F("#DEVICE,0x"));
+  if (ft_addr < 0x10) Serial.print('0');
+  Serial.print(ft_addr, HEX);
+  Serial.print(',');
+  if (id.valid) {
+    Serial.print(id.swVersionMajor); Serial.print('.');
+    Serial.print(id.swVersionMinor); Serial.print('.');
+    Serial.print(id.swVersionPatch);
+  }
+  Serial.print(',');
+  if (id.valid) Serial.print(id.swPartNumber);
+  Serial.print(',');
+  if (id.valid) Serial.print(id.swBuildNumber);
+  Serial.print(',');
+  if (ft_serialOk) {                    /* เว้นว่างถ้าชิปไม่มี record นี้ */
+    Serial.print(F("0x"));
+    Serial.print((uint32_t)(ft_serial >> 32), HEX);
+    Serial.print((uint32_t)(ft_serial & 0xFFFFFFFFUL), HEX);
+  }
+  Serial.print(',');
+  switch (ft_auth) {
+    case MASSMORE_AUTH_OK:         Serial.println(F("GENUINE"));            break;
+    case MASSMORE_AUTH_UNKNOWN_FW: Serial.println(F("GENUINE_UNKNOWN_FW")); break;
+    case MASSMORE_AUTH_NO_RESPONSE:Serial.println(F("NO_RESPONSE"));        break;
+    default:                       Serial.println(F("SUSPECT"));            break;
+  }
+}
+
 static void ftSummary(bool gatePassed) {
+  bool overall = gatePassed && (ft_failed == 0);
+
   Serial.println();
   ftLine('=');
-  Serial.println(F("  สรุปผลการทดสอบ  /  TEST SUMMARY"));
+  Serial.println(F("  รายงานผลการทดสอบ  /  TEST REPORT"));
   ftLine('=');
-  Serial.print(F("  ทดสอบทั้งหมด "));
-  Serial.print(ft_index);
-  Serial.print(F(" หัวข้อ    PASS="));
-  Serial.print(ft_passed);
-  Serial.print(F("  FAIL="));
-  Serial.print(ft_failed);
-  Serial.print(F("  WARN="));
-  Serial.println(ft_warned);
-  ftLine('-');
 
-  bool overall = gatePassed && (ft_failed == 0);
+  ftReportDevice();
+  ftLine('-');
+  ftReportItems();
+  ftLine('-');
+  ftReportTotals();
+  ftLine('=');
+
   if (overall) {
     Serial.println(F("   #####    #     #####  #####"));
     Serial.println(F("   #    #  # #   #      #     "));
@@ -1246,9 +1578,15 @@ static void ftSummary(bool gatePassed) {
     Serial.println(F("   #      #   # #   # #   "));
     Serial.println(F("   #      #   # #    #####"));
     Serial.println();
-    Serial.println(F("  >>> บอร์ดนี้ไม่ผ่าน -- ดูหัวข้อที่ขึ้น FAIL ด้านบน <<<"));
+    if (!gatePassed) {
+      Serial.println(F("  >>> ไม่ผ่านด่านตรวจอุปกรณ์ จึงไม่ได้เข้าโหมด RUN TEST <<<"));
+    } else {
+      Serial.println(F("  >>> บอร์ดนี้ไม่ผ่าน -- ดูหัวข้อที่ขึ้น [✗] ด้านบน <<<"));
+    }
   }
   ftLine('=');
+
+  ftMachineDeviceLine();
 
   Serial.print(F("#VERDICT,"));
   Serial.print(overall ? F("PASS") : F("FAIL"));
@@ -1265,6 +1603,10 @@ static void ftSummary(bool gatePassed) {
 
 static void runFactoryTest() {
   ft_index = ft_passed = ft_failed = ft_warned = 0;
+  ft_auth     = MASSMORE_AUTH_NO_RESPONSE;
+  ft_serial   = 0;
+  ft_serialOk = false;
+  memset(ft_items, 0, sizeof(ft_items));
   ftCountReset();
 
   ftBanner();

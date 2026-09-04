@@ -63,11 +63,12 @@ public:
 
     /*!
      * @brief Start the sensor on an I2C bus.
-     * @param address  0x4A (SA0 low) or 0x4B (SA0 high, the usual default).
+     * @param address  0x4A (DI/SA0 low) or 0x4B (DI/SA0 high, the default).
      * @param wirePort Which TwoWire instance to use. Defaults to Wire.
-     * @param intPin   H_INTN pin, or -1 if not connected. Strongly recommended:
+     * @param intPin   H_INTN pin (the INT pad), or -1 if not connected.
+     *                 Strongly recommended:
      *                 with an INT pin the driver never polls a silent bus.
-     * @param rstPin   NRST pin, or -1. Enables hardwareReset().
+     * @param rstPin   NRST pin (the RST pad), or -1. Enables hardwareReset().
      * @return true on success. Call getLastError() for the reason on failure.
      *
      * @note The BNO08x needs ~90 ms after power-on before it answers. begin()
@@ -80,12 +81,15 @@ public:
 
     /*!
      * @brief Start the sensor on an SPI bus (CPOL=1, CPHA=1 → SPI_MODE3).
-     * @param csPin    Chip select (H_CSN).
-     * @param intPin   H_INTN. REQUIRED for SPI — SHTP over SPI has no other way
+     * @param csPin    Chip select (H_CSN — the CS pad).
+     * @param intPin   H_INTN (the INT pad). REQUIRED for SPI — SHTP over SPI
+     *                 has no other way
      *                 to know when a cargo is waiting.
-     * @param rstPin   NRST. REQUIRED for SPI — the part must be reset while
-     *                 PS0/PS1 are high to latch SPI mode.
-     * @param wakePin  PS0/WAKE, or -1. Needed to wake the part from sleep.
+     * @param rstPin   NRST (the RST pad). REQUIRED for SPI — the part must be
+     *                 reset while PS0/PS1 (the P0/P1 pads) are high to latch
+     *                 SPI mode.
+     * @param wakePin  PS0/WAKE (the P0 pad), or -1. Needed to wake the part
+     *                 from sleep.
      * @param spiPort  Which SPIClass to use. Defaults to SPI.
      * @param speedHz  SPI clock. The BNO08x is specified to 3 MHz.
      */
@@ -95,10 +99,12 @@ public:
                   uint32_t speedHz = 3000000UL);
 
     /*!
-     * @brief Start the sensor on SHTP-over-UART (PS1=1, PS0=0), 3 Mbit/s.
+     * @brief Start the sensor on SHTP-over-UART, 3 Mbit/s.
+     *        Strap PS1=1, PS0=0 — the P1 and P0 pads on the Massmore board.
+     *        The sensor's TX is the SDA pad, its RX is the SCL pad.
      * @param serialPort An already-begun Stream (HardwareSerial…).
-     * @param intPin     H_INTN, or -1.
-     * @param rstPin     NRST, or -1.
+     * @param intPin     H_INTN (the INT pad), or -1.
+     * @param rstPin     NRST (the RST pad), or -1.
      * @note This is *not* UART-RVC. For the simple 100 Hz RVC output stream use
      *       the separate MassmoreBNO08x_RVC class in Massmore_BNO08x_RVC.h.
      */
@@ -122,8 +128,27 @@ public:
      */
     massmore_status_t requestProductID(uint32_t timeoutMs = 300);
 
-    /*! @brief The cached Product ID. Populated by begin() and requestProductID(). */
+    /*!
+     * @brief The Product ID of the SH-2 application.
+     *
+     * The part answers a Product ID Request with one response per firmware
+     * image it carries. This returns the entry whose part number matches a
+     * known SH-2 application build, or the first entry received if none does.
+     * Populated by begin() and requestProductID().
+     */
     const massmore_product_id_t &getProductID() const { return _productId; }
+
+    /*! @brief How many Product ID Responses the last request collected. */
+    uint8_t getProductIDCount() const { return _productIdCount; }
+
+    /*!
+     * @brief One of the collected Product ID Responses, in arrival order.
+     * @param index 0 .. getProductIDCount()-1. Out of range returns the
+     *        primary entry, so the return value is always readable.
+     */
+    const massmore_product_id_t &getProductID(uint8_t index) const {
+        return (index < _productIdCount) ? _productIds[index] : _productId;
+    }
 
     /*!
      * @brief Verify that the attached part behaves like genuine BNO08x silicon.
@@ -409,8 +434,15 @@ public:
     static const char *accuracyToString(massmore_accuracy_t a);
 
     /*!
-     * @brief Timestamp of the most recent report, in microseconds, referenced
-     *        to the sensor's own timebase (base timestamp + per-report delay).
+     * @brief Timestamp of the most recent report, in microseconds on the
+     *        host's micros() clock.
+     *
+     * The BNO08x does not send an absolute time. Every packet carries a SIGNED
+     * base-timestamp delta and every report a delay, both in 100 us ticks and
+     * both relative to the moment the packet was transferred. The driver
+     * anchors them to micros() taken as the packet arrived, so this value is
+     * comparable with millis()/micros() and advances monotonically. Accuracy is
+     * limited by how promptly your loop() calls update().
      */
     uint64_t getTimestampUs() const { return _timestampUs; }
     /*! @brief Sequence number of the most recent report — use it to spot drops. */
@@ -479,7 +511,7 @@ public:
     /*! @brief Executable "sleep": only wake/always-on sensors keep running. */
     massmore_status_t modeSleep();
 
-    /*! @brief Pulse the PS0/WAKE line (SPI only) to wake the part. */
+    /*! @brief Pulse the PS0/WAKE line — the P0 pad — (SPI only) to wake the part. */
     void wake();
 
     /*! @brief Query the oscillator type (command 10). Result in getOscillatorType(). */
@@ -570,7 +602,8 @@ private:
     uint8_t  _activityConfidence[MASSMORE_ACTIVITY_COUNT];
 
     uint64_t _timestampUs;
-    uint32_t _timebaseDelta100us;
+    int32_t  _timebaseDelta100us;   //!< signed, 100 us ticks — [1] Figure 1-35
+    uint32_t _rxHostMicros;         //!< micros() when the packet was received
     uint8_t  _lastReportId;
     uint8_t  _lastReportSeq;
 
@@ -584,7 +617,9 @@ private:
     uint8_t  _advertReportLen[0x40];   //!< v1.0.1: was a file-scope static    //!< last known report interval per sensor
 
     /* ---- command / query results -------------------------------------- */
-    massmore_product_id_t _productId;
+    massmore_product_id_t _productId;                                 //!< SH-2 application entry
+    massmore_product_id_t _productIds[MASSMORE_BNO08X_MAX_PRODUCT_IDS];
+    uint8_t               _productIdCount;
     uint8_t  _calibrationStatus;
     uint8_t  _oscillatorType;
     uint8_t  _errorCount;

@@ -29,7 +29,11 @@
 MassmoreBNO08x imu;
 
 void setup() {
-  Serial.begin(921600);       // raw logging wants a fast port
+  // Raw logging wants a fast port: three raw reports at 100 Hz do not fit in
+  // 115200. Set your serial monitor to 460800 to match (in platformio.ini:
+  // monitor_speed = 460800). 921600 is faster still, but several USB-serial
+  // drivers on macOS are unreliable there.
+  Serial.begin(460800);
   while (!Serial && millis() < 3000) { }
 
 #if defined(ARDUINO_ARCH_ESP32)

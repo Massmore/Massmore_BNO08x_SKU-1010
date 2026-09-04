@@ -87,21 +87,29 @@ void TwoWire::setClock(uint32_t) {}
 void TwoWire::beginTransmission(uint8_t) { g_lastWrite.clear(); }
 static uint8_t g_resetCause = 1;   /* what the mock reports next */
 
-/* Real hardware answers a Product ID Request with a Product ID Response, so
- * the mock does too. Everything else the tests queue explicitly. */
+static void queueProductId(uint8_t major, uint8_t minor, uint16_t patch,
+                           uint32_t part, uint32_t build) {
+    std::vector<uint8_t> pid = { 0xF8, g_resetCause, major, minor };
+    pid.push_back((uint8_t)part);       pid.push_back((uint8_t)(part >> 8));
+    pid.push_back((uint8_t)(part>>16)); pid.push_back((uint8_t)(part >> 24));
+    pid.push_back((uint8_t)build);      pid.push_back((uint8_t)(build >> 8));
+    pid.push_back((uint8_t)(build>>16));pid.push_back((uint8_t)(build >> 24));
+    pid.push_back((uint8_t)patch);      pid.push_back((uint8_t)(patch >> 8));
+    pid.push_back(0); pid.push_back(0);
+    g_queue.push_back({ MASSMORE_CH_CONTROL, pid });
+}
+
+/* Real hardware answers a Product ID Request with SEVERAL Product ID
+ * Responses, one per firmware image, and the SH-2 application is not
+ * necessarily first. The mock reproduces that: a companion image whose part
+ * number is not in the driver's table arrives first, the application second.
+ * Everything else the tests queue explicitly. */
 uint8_t TwoWire::endTransmission() {
     if (g_lastWrite.size() >= 6 &&
         g_lastWrite[2] == MASSMORE_CH_CONTROL &&
         g_lastWrite[4] == MASSMORE_REPORT_PRODUCT_ID_REQ) {
-        std::vector<uint8_t> pid = { 0xF8, g_resetCause, 3, 2 };
-        uint32_t part = 10003606UL, build = 370UL; uint16_t patch = 17;
-        pid.push_back((uint8_t)part);       pid.push_back((uint8_t)(part >> 8));
-        pid.push_back((uint8_t)(part>>16)); pid.push_back((uint8_t)(part >> 24));
-        pid.push_back((uint8_t)build);      pid.push_back((uint8_t)(build >> 8));
-        pid.push_back((uint8_t)(build>>16));pid.push_back((uint8_t)(build >> 24));
-        pid.push_back((uint8_t)patch);      pid.push_back((uint8_t)(patch >> 8));
-        pid.push_back(0); pid.push_back(0);
-        g_queue.push_back({ MASSMORE_CH_CONTROL, pid });
+        queueProductId(1, 10, 10, 10004563UL, 404UL);   /* companion image */
+        queueProductId(3,  2, 17, 10003606UL, 370UL);   /* SH-2 application */
     }
     return 0;
 }
@@ -233,6 +241,17 @@ int main() {
         check("reset reason string",
               std::string(imu.getResetReasonString()) == "Power on reset");
         check("verifyChip() == OK", imu.verifyChip() == MASSMORE_AUTH_OK);
+
+        /* The part answers with more than one image. Keeping only the first
+         * response is how a genuine part gets reported as UNKNOWN_FW. */
+        check("both Product ID responses collected", imu.getProductIDCount() == 2,
+              "got " + std::to_string((int)imu.getProductIDCount()));
+        check("companion image kept as entry 0",
+              imu.getProductID(0).swPartNumber == 10004563UL);
+        check("SH-2 application kept as entry 1",
+              imu.getProductID(1).swPartNumber == 10003606UL);
+        check("primary entry is the application, not the first to arrive",
+              imu.getProductID().swPartNumber == 10003606UL);
     }
 
     /* --- 2. rotation vector, Q14 / Q12 --------------------------------- */
@@ -326,7 +345,9 @@ int main() {
         push16(p, 800);    /* 50.0    */
 
         queueFrame(MASSMORE_CH_INPUT_REPORT, p);
+        uint64_t hostBefore = (uint64_t)micros();
         imu.update();
+        uint64_t hostAfter  = (uint64_t)micros();
 
         massmore_vec3_t a = imu.getAccel();
         checkNear("accel.x 1.0 m/s2",  a.x,  1.0f,   1e-3f);
@@ -355,10 +376,46 @@ int main() {
               imu.getAccuracy(MASSMORE_SENSOR_GYROSCOPE)     == MASSMORE_ACCURACY_HIGH &&
               imu.getAccuracy(MASSMORE_SENSOR_MAGNETIC_FIELD)== MASSMORE_ACCURACY_LOW);
 
-        /* mag was the last report parsed: 120 base + 0 delay = 12000 us */
-        check("timestamp = (base + delay) * 100us",
-              imu.getTimestampUs() == 12000ULL,
-              "got " + std::to_string((unsigned long long)imu.getTimestampUs()));
+        /* The base timestamp and the per-report delay are offsets from the
+         * moment the packet arrived, so the driver anchors them to micros().
+         * mag was the last report parsed: 120 base + 0 delay = +12000 us. */
+        uint64_t ts = imu.getTimestampUs();
+        check("timestamp = host micros + (base + delay) * 100us",
+              ts >= hostBefore + 12000ULL && ts <= hostAfter + 12000ULL,
+              "got " + std::to_string((unsigned long long)ts) +
+              ", host window " + std::to_string((unsigned long long)hostBefore) +
+              ".." + std::to_string((unsigned long long)hostAfter));
+    }
+
+    /* --- 5b. the base timestamp delta is SIGNED ------------------------- */
+    printf("\n[5b] Negative base timestamp delta\n");
+    {
+        /* Reports are generated BEFORE the packet is transferred, so the base
+         * delta is normally negative. Reading it as unsigned turns -120 into
+         * 4294967176 and sends the timestamp 429 seconds into the future --
+         * that was a real bug, caught by the factory test on hardware. */
+        std::vector<uint8_t> p;
+        p.push_back(MASSMORE_REPORT_BASE_TIMESTAMP);
+        push32(p, (uint32_t)(int32_t)-120);          /* -12 ms */
+
+        pushPrefix(p, MASSMORE_SENSOR_ACCELEROMETER, 4, MASSMORE_ACCURACY_HIGH, 20);
+        push16(p, 0); push16(p, 0); push16(p, 2511);
+
+        queueFrame(MASSMORE_CH_INPUT_REPORT, p);
+        uint64_t hostBefore = (uint64_t)micros();
+        imu.update();
+        uint64_t hostAfter  = (uint64_t)micros();
+
+        /* -120 base + 20 delay = -100 ticks = -10000 us */
+        uint64_t ts = imu.getTimestampUs();
+        check("negative base delta moves the timestamp backwards",
+              ts >= hostBefore - 10000ULL && ts <= hostAfter - 10000ULL,
+              "got " + std::to_string((unsigned long long)ts) +
+              ", host window " + std::to_string((unsigned long long)hostBefore) +
+              ".." + std::to_string((unsigned long long)hostAfter));
+        check("and stays well below one second from the host clock",
+              ts < hostAfter + 1000000ULL,
+              "got " + std::to_string((unsigned long long)ts));
     }
 
     /* --- 6. step counter ---------------------------------------------- */

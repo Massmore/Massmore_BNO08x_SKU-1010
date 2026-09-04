@@ -9,16 +9,20 @@
   It is designed for ground robots — the R, V and C stand for Robot Vacuum
   Cleaner — and it is ideal any time you just want a heading.
 
-  WIRING
-    BNO08x            ESP32
-    ------            -----
-    VIN         ->    3V3
+  WIRING — pad names as printed on the Massmore Halley V2 board
+    Halley V2         ESP32
+    ---------         -----
+    3Vo         ->    3V3       (or 5V pad -> 5V, the board regulates it)
     GND         ->    GND
-    TX          ->    GPIO 16   (the ESP32's RX)
-    PS1         ->    GND
-    PS0         ->    3V3
-    BOOTN       ->    3V3 through 10k
-    RST         ->    3V3 (or a GPIO)
+    SDA         ->    GPIO 16   sensor TX -> the ESP32's RX
+    P1          ->    GND
+    P0          ->    3Vo
+    BT          ->    leave open (its pull-up keeps it out of bootloader)
+    RST         ->    leave open, or a GPIO
+
+  In this mode the SDA pad is the sensor's TX. Drive it at 3.3 V — the Qwiic
+  connector, or the SDA pad with a 3.3 V host — because the board's 2N7002
+  level shifter is meant for open-drain I2C, not a push-pull UART line.
 
   The sensor needs its external crystal or clock in this mode; the internal
   oscillator is not accurate enough for the UART.
@@ -32,7 +36,7 @@
 
 #include <Massmore_BNO08x_RVC.h>
 
-#define RVC_RX_PIN  16     // ESP32 pin connected to the sensor's TX
+#define RVC_RX_PIN  16     // ESP32 pin connected to the Halley V2 SDA pad (sensor TX)
 #define RVC_TX_PIN  17     // unused by RVC, but Serial1 wants a pin
 
 MassmoreBNO08x_RVC rvc;

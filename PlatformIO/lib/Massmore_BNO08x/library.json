@@ -1,6 +1,6 @@
 {
   "name": "Massmore_BNO08x",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Complete driver for the BNO085 / BNO086 9-axis sensor fusion IMU. Full SH-2 / SHTP implementation over I2C, SPI and UART, plus UART-RVC. Every sensor report from basic quaternions to the personal activity classifier and the 1 kHz gyro-integrated rotation vector. Includes chip identity and authenticity verification, calibration, tare, FRS access and power management. No external dependencies, no dynamic allocation.",
   "keywords": [
     "bno085", "bno086", "bno08x", "imu", "9dof", "sensor-fusion",

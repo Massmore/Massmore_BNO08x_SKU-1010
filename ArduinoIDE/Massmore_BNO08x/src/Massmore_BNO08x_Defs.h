@@ -24,18 +24,20 @@
  * ========================================================================= */
 #define MASSMORE_BNO08X_VERSION_MAJOR 1
 #define MASSMORE_BNO08X_VERSION_MINOR 0
-#define MASSMORE_BNO08X_VERSION_PATCH 1
-#define MASSMORE_BNO08X_VERSION_STR   "1.0.1"
+#define MASSMORE_BNO08X_VERSION_PATCH 2
+#define MASSMORE_BNO08X_VERSION_STR   "1.0.2"
 
 /* ===========================================================================
  * I2C addresses — Datasheet [1] §1.2.3, Figure 1-12
  * 7-bit address is 100101<SA0>, i.e. 0x4A when SA0 = 0, 0x4B when SA0 = 1.
+ * On the Massmore Halley V2 board that pin is the pad marked DI.
  * ========================================================================= */
-#define MASSMORE_BNO08X_I2C_ADDR_LOW   0x4A  //!< SA0 tied low
-#define MASSMORE_BNO08X_I2C_ADDR_HIGH  0x4B  //!< SA0 tied high (most breakouts)
+#define MASSMORE_BNO08X_I2C_ADDR_LOW   0x4A  //!< DI (SA0) tied low
+#define MASSMORE_BNO08X_I2C_ADDR_HIGH  0x4B  //!< DI (SA0) tied high (default)
 #define MASSMORE_BNO08X_I2C_ADDR_DEF   MASSMORE_BNO08X_I2C_ADDR_HIGH
 
-/* Bootloader (DFU) addresses when BOOTN is pulled low at reset — [1] §1.4 */
+/* Bootloader (DFU) addresses when BOOTN (the BT pad) is pulled low at reset
+   — [1] §1.4 */
 #define MASSMORE_BNO08X_BOOTLOADER_ADDR_LOW   0x28
 #define MASSMORE_BNO08X_BOOTLOADER_ADDR_HIGH  0x29
 
@@ -48,6 +50,18 @@
  * ========================================================================= */
 #ifndef MASSMORE_BNO08X_MAX_PACKET
 #define MASSMORE_BNO08X_MAX_PACKET 300
+#endif
+
+/* ===========================================================================
+ * Product ID responses
+ * A Product ID Request is answered with SEVERAL Product ID Responses, one per
+ * firmware image the part carries — the SH-2 application is only one of them,
+ * and it is not always the first to arrive. Keeping just one response is how
+ * a genuine part ends up reported as "unknown firmware": you may have kept the
+ * bootloader's entry instead of the application's. The driver stores them all.
+ * ========================================================================= */
+#ifndef MASSMORE_BNO08X_MAX_PRODUCT_IDS
+#define MASSMORE_BNO08X_MAX_PRODUCT_IDS 5
 #endif
 
 /* ===========================================================================

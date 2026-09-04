@@ -8,25 +8,29 @@
   chip select assertion. The BNO08x runs SPI at up to 3 MHz in mode 3
   (CPOL = 1, CPHA = 1).
 
-  WIRING — this matters, SPI mode is latched at reset
-    BNO08x            ESP32
-    ------            -----
-    VIN         ->    3V3
+  WIRING — pad names as printed on the Massmore Halley V2 board.
+  This matters: SPI mode is latched at reset.
+    Halley V2         ESP32
+    ---------         -----
+    3Vo         ->    3V3       (or 5V pad -> 5V, the board regulates it)
     GND         ->    GND
-    SCK/SCL     ->    GPIO 18   (SCK)
-    MISO/SA0    ->    GPIO 19
-    MOSI/SDA    ->    GPIO 23
+    SCL         ->    GPIO 18   SCK
+    SDA         ->    GPIO 19   MISO
+    DI          ->    GPIO 23   MOSI   (same pad as SA0 in I2C mode)
     CS          ->    GPIO 15
     INT         ->    GPIO 4    REQUIRED
     RST         ->    GPIO 5    REQUIRED
-    PS0/WAKE    ->    GPIO 16   (also must be HIGH at reset)
-    PS1         ->    3V3
-    BOOTN       ->    3V3 through 10k
+    P0          ->    GPIO 16   WAKE   (also must be HIGH at reset)
+    P1          ->    3Vo
+    BT          ->    leave open (its pull-up keeps it out of bootloader)
 
-  Both PS1 and PS0 must be high from before the reset until after the first
-  H_INTN assertion — that is what selects SPI. The library drives PS0 high for
-  you if you give it the wakePin. After reset, PS0 doubles as the active-low
+  Both P1 and P0 must be high from before the reset until after the first
+  H_INTN assertion — that is what selects SPI. The library drives P0 high for
+  you if you give it the wakePin. After reset, P0 doubles as the active-low
   WAKE signal.
+
+  Note: only SDA and SCL pass through the board's 2N7002 level shifter. DI and
+  CS are 3.3 V only, so drive this bus from a 3.3 V host.
 
   Product: https://www.massmore.shop
 */
@@ -34,13 +38,13 @@
 #include <SPI.h>
 #include <Massmore_BNO08x.h>
 
-#define SPI_SCK   18
-#define SPI_MISO  19
-#define SPI_MOSI  23
-#define CS_PIN    15
+#define SPI_SCK   18     // -> Halley V2 SCL
+#define SPI_MISO  19     // -> Halley V2 SDA
+#define SPI_MOSI  23     // -> Halley V2 DI
+#define CS_PIN    15     // -> Halley V2 CS
 #define INT_PIN    4
 #define RST_PIN    5
-#define WAKE_PIN  16     // PS0/WAKE, set to -1 if you tied PS0 to 3V3
+#define WAKE_PIN  16     // Halley V2 P0 (WAKE), set to -1 if you tied P0 to 3Vo
 
 MassmoreBNO08x imu;
 uint32_t lastPrint = 0;
@@ -61,7 +65,7 @@ void setup() {
   if (!imu.beginSPI(CS_PIN, INT_PIN, RST_PIN, WAKE_PIN, SPI, 3000000UL)) {
     Serial.print(F("BNO08x not found on SPI: "));
     Serial.println(MassmoreBNO08x::statusToString(imu.getLastError()));
-    Serial.println(F("Check that PS1 and PS0 were both HIGH during reset."));
+    Serial.println(F("Check that P1 and P0 were both HIGH during reset."));
     while (1) delay(100);
   }
 

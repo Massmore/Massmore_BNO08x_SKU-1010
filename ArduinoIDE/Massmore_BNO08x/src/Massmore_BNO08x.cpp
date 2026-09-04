@@ -109,6 +109,10 @@ static const uint32_t kKnownPartNumbers[] = {
     10003606UL,   /* BNO080 / BNO085 / BNO086 SH-2 application */
     10004095UL    /* seen on later BNO086 production builds     */
 };
+/* Companion images answer the same request with their own part numbers —
+ * 10004563 has been observed alongside 10003606 on genuine BNO086 parts. They
+ * are not SH-2 applications, so they are deliberately NOT in the table above;
+ * verifyChip() looks at every response, so one match is enough. */
 static const uint8_t kKnownPartCount =
     sizeof(kKnownPartNumbers) / sizeof(kKnownPartNumbers[0]);
 
@@ -134,6 +138,9 @@ MassmoreBNO08x::MassmoreBNO08x() {
 
 void MassmoreBNO08x::resetState() {
     _rxLen = 0; _rxChannel = 0; _rxSeq = 0;
+    _rxHostMicros = 0;
+    _productIdCount = 0;
+    memset(_productIds, 0, sizeof(_productIds));
     memset(_seqNum, 0, sizeof(_seqNum));
     _cmdSeqNum = 0;
 
@@ -650,6 +657,9 @@ bool MassmoreBNO08x::update() {
     if (_busType == MASSMORE_BUS_NONE) return false;
     if (_intPin >= 0 && digitalRead(_intPin) == HIGH) return false;
     if (!receivePacket()) return false;
+    /* Anchor for the report timestamps in this packet. Taken before parsing so
+     * the value is as close as possible to the moment the bytes arrived. */
+    _rxHostMicros = micros();
     parsePacket();
     return true;
 }
@@ -789,7 +799,7 @@ void MassmoreBNO08x::parseInputReports(bool wakeChannel) {
         if (id == MASSMORE_REPORT_BASE_TIMESTAMP) {
             /* Base delta, signed, in 100 us ticks — [1] Figure 1-35 */
             if (off + 5 > _rxLen) break;
-            _timebaseDelta100us = rd32(&_rxBuf[off + 1]);
+            _timebaseDelta100us = (int32_t)rd32(&_rxBuf[off + 1]);
             off += 5;
             continue;
         }
@@ -830,7 +840,14 @@ uint16_t MassmoreBNO08x::parseOneSensorReport(uint16_t offset) {
     /* Reconstruct the report timestamp — [1] §1.3.5.3.
      * delay = (status[7:2] << 8 | delayLSB) ticks of 100 us. */
     uint32_t delay100us = (((uint32_t)(status >> 2)) << 8) | r[3];
-    _timestampUs = ((uint64_t)_timebaseDelta100us + delay100us) * 100ULL;
+
+    /* Both the base delta and the delay are SIGNED offsets in 100 us ticks
+     * from the instant the packet was transferred — reading the base as an
+     * unsigned value turns every negative delta into ~4.29e9 and makes the
+     * timestamp jump backwards. Anchor them to the host clock instead. */
+    int64_t rel100us = (int64_t)_timebaseDelta100us + (int64_t)delay100us;
+    int64_t ts       = (int64_t)_rxHostMicros + rel100us * 100;
+    _timestampUs     = (ts < 0) ? 0 : (uint64_t)ts;
 
     switch (id) {
     case MASSMORE_SENSOR_ACCELEROMETER:
@@ -1066,13 +1083,39 @@ void MassmoreBNO08x::parseControlReport() {
 
 void MassmoreBNO08x::parseProductIdResponse() {
     if (_rxLen < 14) return;
-    _productId.resetCause     = _rxBuf[1];
-    _productId.swVersionMajor = _rxBuf[2];
-    _productId.swVersionMinor = _rxBuf[3];
-    _productId.swPartNumber   = rd32(&_rxBuf[4]);
-    _productId.swBuildNumber  = rd32(&_rxBuf[8]);
-    _productId.swVersionPatch = rd16(&_rxBuf[12]);
-    _productId.valid          = true;
+
+    massmore_product_id_t p;
+    p.resetCause     = _rxBuf[1];
+    p.swVersionMajor = _rxBuf[2];
+    p.swVersionMinor = _rxBuf[3];
+    p.swPartNumber   = rd32(&_rxBuf[4]);
+    p.swBuildNumber  = rd32(&_rxBuf[8]);
+    p.swVersionPatch = rd16(&_rxBuf[12]);
+    p.valid          = true;
+
+    /* Is this the SH-2 application, or one of the companion images? */
+    bool isApp = false;
+    for (uint8_t i = 0; i < kKnownPartCount; i++) {
+        if (p.swPartNumber == kKnownPartNumbers[i]) { isApp = true; break; }
+    }
+
+    /* Keep every distinct response. After a reset the part re-announces itself
+     * unprompted, so the same entry can arrive more than once. */
+    bool duplicate = false;
+    for (uint8_t i = 0; i < _productIdCount; i++) {
+        if (_productIds[i].swPartNumber  == p.swPartNumber &&
+            _productIds[i].swBuildNumber == p.swBuildNumber) {
+            duplicate = true;
+            break;
+        }
+    }
+    if (!duplicate && _productIdCount < MASSMORE_BNO08X_MAX_PRODUCT_IDS) {
+        _productIds[_productIdCount++] = p;
+    }
+
+    /* Primary entry: the SH-2 application when we can recognise it, otherwise
+     * whichever response arrived first. */
+    if (isApp || !_productId.valid) _productId = p;
 
     dbgPrintf("[massmore] SW %u.%u.%u part %lu build %lu\n",
               _productId.swVersionMajor, _productId.swVersionMinor,
@@ -1156,17 +1199,35 @@ massmore_status_t MassmoreBNO08x::requestProductID(uint32_t timeoutMs) {
     if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
 
     _productId.valid = false;
+    _productIdCount  = 0;
+    memset(_productIds, 0, sizeof(_productIds));
 
     _txBuf[4] = MASSMORE_REPORT_PRODUCT_ID_REQ;
     _txBuf[5] = 0;                                  /* reserved — [1] Fig 1-28 */
     if (!txPacket(MASSMORE_CH_CONTROL, 2)) return _lastError;
 
-    uint32_t start = millis();
+    /* The part answers with one response per firmware image, back to back.
+     * Returning on the first one is how you end up holding the bootloader's
+     * entry instead of the application's, so collect the whole burst: keep
+     * reading until it has been quiet for a moment, or the timeout expires. */
+    const uint32_t quietMs = 80;
+    uint32_t start   = millis();
+    uint32_t lastNew = start;
+    uint8_t  seen    = 0;
+
     while ((millis() - start) < timeoutMs) {
-        if (update() && _productId.valid) return (_lastError = MASSMORE_OK);
+        update();
+        if (_productIdCount != seen) {
+            seen    = _productIdCount;
+            lastNew = millis();
+        } else if (seen && (millis() - lastNew) >= quietMs) {
+            break;                                  /* burst finished */
+        }
         delayMicroseconds(200);
     }
-    return (_lastError = MASSMORE_ERR_TIMEOUT);
+
+    return _productId.valid ? (_lastError = MASSMORE_OK)
+                            : (_lastError = MASSMORE_ERR_TIMEOUT);
 }
 
 massmore_auth_t MassmoreBNO08x::verifyChip() {
@@ -1184,6 +1245,16 @@ massmore_auth_t MassmoreBNO08x::verifyChip() {
         return MASSMORE_AUTH_BAD_RESPONSE;
     }
 
+    /* Any one of the collected responses matching a known SH-2 application
+     * build is enough. The companion images carry their own part numbers and
+     * would otherwise drag a genuine part down to UNKNOWN_FW. */
+    for (uint8_t e = 0; e < _productIdCount; e++) {
+        for (uint8_t i = 0; i < kKnownPartCount; i++) {
+            if (_productIds[e].swPartNumber == kKnownPartNumbers[i]) {
+                return MASSMORE_AUTH_OK;
+            }
+        }
+    }
     for (uint8_t i = 0; i < kKnownPartCount; i++) {
         if (_productId.swPartNumber == kKnownPartNumbers[i]) {
             return MASSMORE_AUTH_OK;

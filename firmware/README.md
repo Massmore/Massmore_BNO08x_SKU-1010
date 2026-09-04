@@ -1,7 +1,7 @@
-# Firmware สำเร็จรูป — `15_FactoryTest`
+# Firmware สำเร็จรูป — `16_FactoryTest`
 
 ไฟล์ในโฟลเดอร์นี้คือ **เฟิร์มแวร์ที่คอมไพล์แล้ว** ของตัวอย่าง
-[`15_FactoryTest`](../ArduinoIDE/Massmore_BNO08x/examples/15_FactoryTest/)
+[`16_FactoryTest`](../ArduinoIDE/Massmore_BNO08x/examples/16_FactoryTest/)
 สำหรับ **ESP32 DevKit (ESP32-WROOM-32, Flash 4 MB)**
 
 ลูกค้าที่ไม่มี Arduino IDE หรือ VS Code สามารถแฟลชไฟล์นี้ผ่านเว็บได้ทันที
@@ -16,7 +16,7 @@
 | Serial | 115200 8N1 |
 | ขา I2C | SDA = GPIO **21**, SCL = GPIO **22** |
 | I2C clock | 100 kHz (BNO08x ใช้ clock stretching) |
-| I2C address | สแกนหาเอง — `0x4B` (SA0 = 1) หรือ `0x4A` (SA0 = 0) |
+| I2C address | สแกนหาเอง — `0x4B` (ขา `DI` = 1) หรือ `0x4A` (ขา `DI` = 0) |
 | INT / RST | ไม่ต้องต่อ |
 
 ---
@@ -39,11 +39,11 @@ firmware/
 
 | ไฟล์ | Offset | ขนาด (ไบต์) |
 |---|---|---|
-| `merged-firmware.bin` | `0x0` | 421,424 |
+| `merged-firmware.bin` | `0x0` | 426,592 |
 | `bootloader.bin` | `0x1000` | 23,520 |
 | `partitions.bin` | `0x8000` | 3,072 |
 | `boot_app0.bin` | `0xE000` | 8,192 |
-| `firmware.bin` | `0x10000` | 355,888 |
+| `firmware.bin` | `0x10000` | 361,056 |
 
 `merged-firmware.bin` คือไฟล์ 4 ตัวข้างบนรวมกันไว้แล้วในไฟล์เดียว
 (ช่วง `0x0`–`0x1000` เติมด้วย `0xFF`) จึงแฟลชที่ `0x0` ได้ตรง ๆ
@@ -51,11 +51,11 @@ firmware/
 ### SHA-256
 
 ```
-2d6d1ba9af5e5ecebbed6ee7f35923af9f8b7dbbc6adc92095f6ed45312666b9  merged-firmware.bin
+7ce108e007bbe8bc4688ba44e74a89ccead570fa9e330ebe76f2c627fc631ae3  merged-firmware.bin
 b2306bbe4af1424d5ea454030d7482774befacaaea068b1add2a621f4328aef8  bootloader.bin
 148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1  partitions.bin
 f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0  boot_app0.bin
-cf2be6a9db258a364b32695e6672a8b62dfccc3f6fb5d89bb80ef1f3163ca547  firmware.bin
+58369f25c4d5f894ffa9470a3d1b877ae2fb6682b2d2d4db26b159b5b71eea8a  firmware.bin
 ```
 
 ---
@@ -84,14 +84,14 @@ cf2be6a9db258a364b32695e6672a8b62dfccc3f6fb5d89bb80ef1f3163ca547  firmware.bin
 ไฟล์เดียวจบ
 
 ```bash
-esptool.py --chip esp32 --port /dev/cu.usbserial-0001 --baud 921600 \
+esptool.py --chip esp32 --port /dev/cu.usbserial-0001 --baud 460800 \
   write_flash -z 0x0 esp32dev/merged-firmware.bin
 ```
 
 หรือแยกทีละส่วน (ใช้เมื่อไม่อยากลบพื้นที่ส่วนอื่นของแฟลช)
 
 ```bash
-esptool.py --chip esp32 --port /dev/cu.usbserial-0001 --baud 921600 \
+esptool.py --chip esp32 --port /dev/cu.usbserial-0001 --baud 460800 \
   write_flash -z \
   0x1000  esp32dev/bootloader.bin \
   0x8000  esp32dev/partitions.bin \
@@ -100,21 +100,26 @@ esptool.py --chip esp32 --port /dev/cu.usbserial-0001 --baud 921600 \
 ```
 
 > บอร์ดบางรุ่นต้องกดปุ่ม **BOOT** ค้างไว้ตอนเริ่มอัปโหลด
-> ถ้าอัปโหลดไม่ผ่าน ให้ลดความเร็วเป็น `--baud 460800` หรือ `115200`
+> ใช้ 460800 เพราะไดรเวอร์ USB-serial บน macOS หลายตัวไม่นิ่งที่ 921600
+> ถ้ายังไม่ผ่าน ให้ลดความเร็วเป็น `--baud 115200`
 
 ---
 
 ## การต่อสาย
 
-| BNO08x (Halley V2) | ESP32 DevKit |
+ชื่อขาคือชื่อที่พิมพ์บนบอร์ด Halley V2
+
+| Halley V2 | ESP32 DevKit |
 |---|---|
-| VIN | 3V3 |
-| GND | GND |
-| SDA | GPIO 21 |
-| SCL | GPIO 22 |
-| INT | ไม่ต้องต่อ (ชุดทดสอบใช้ polling) |
-| RST | ไม่ต้องต่อ (ใช้ soft reset ผ่าน executable channel) |
-| BOOTN | ปล่อยไว้ตามบอร์ด **ห้ามดึงลงกราวด์** ไม่งั้นชิปจะเข้า bootloader |
+| `5V` หรือ `3Vo` | 5V หรือ 3V3 |
+| `GND` | GND |
+| `SDA` | GPIO 21 |
+| `SCL` | GPIO 22 |
+| `INT` | ไม่ต้องต่อ (ชุดทดสอบใช้ polling) |
+| `RST` | ไม่ต้องต่อ (ใช้ soft reset ผ่าน executable channel) |
+| `DI` | ไม่ต้องต่อ = `0x4B` · ต่อลง GND = `0x4A` |
+| `BT` | ปล่อยไว้ตามบอร์ด **ห้ามดึงลงกราวด์** ไม่งั้นชิปจะเข้า bootloader |
+| `P0` `P1` | ไม่ต้องต่อ (ต้องเป็น 0/0 จึงจะเป็นโหมด I2C) |
 
 pull-up ของ SDA/SCL ควรอยู่ที่ **2.2k–4.7k** ต่อไฟ 3V3 ตามที่ datasheet ของ CEVA
 ระบุไว้ (2–4 kΩ) ไม่ใช่ 10k แบบที่บอร์ด breakout หลายเจ้าให้มา
@@ -132,17 +137,17 @@ pull-up ของ SDA/SCL ควรอยู่ที่ **2.2k–4.7k** ต่�
   MASSMORE BNO08x 9-AXIS IMU  --  FACTORY TEST
   SKU-1010   BNO085 / BNO086 Sensor Fusion (I2C)
 ==============================================================
-  library   : Massmore_BNO08x v1.0.1
+  library   : Massmore_BNO08x v1.0.2
   board     : ESP32 DevKit (Flash 4 MB)   CPU 240 MHz
   interface : I2C  SDA=GPIO21  SCL=GPIO22  clock=100 kHz
-  address   : 0x4B (SA0=1) หรือ 0x4A (SA0=0) -- สแกนหาเอง
+  address   : 0x4B (DI=1) หรือ 0x4A (DI=0) -- สแกนหาเอง
   ...
 
 ### STAGE 1-2 : ตรวจอุปกรณ์ก่อนเข้าโหมดทดสอบ ###
 
 [01] DEVICE DETECT -- ค้นหา BNO08x บนบัส I2C
      สแกน address 0x01..0x7E
-       พบอุปกรณ์ที่ 0x4B   <-- BNO08x (SA0 = 1, ค่าจากโรงงาน)
+       พบอุปกรณ์ที่ 0x4B   <-- BNO08x (ขา DI = 1, ค่าจากโรงงาน)
      -> PASS  (addr=0x4B ACK, พบทั้งหมด 1 ตัว)
 
 [02] IDENTITY -- Product ID (0xF8) และตรวจว่าเป็นของแท้
@@ -154,14 +159,14 @@ pull-up ของ SDA/SCL ควรอยู่ที่ **2.2k–4.7k** ต่�
 ```
 
 ถ้า **STAGE 1 หรือ 2 ไม่ผ่าน โปรแกรมจะไม่เข้าโหมด RUN TEST** และพิมพ์ FAIL
-พร้อมรายการสิ่งที่ต้องตรวจ (สาย, pull-up, ไฟเลี้ยง, BOOTN)
+พร้อมรายการสิ่งที่ต้องตรวจ (สาย, pull-up, ไฟเลี้ยง, ขา `BT`)
 
 เมื่อผ่านด่านตรวจอุปกรณ์แล้วจะไล่ทดสอบต่ออีก 22 หัวข้อ:
 
 | # | หัวข้อ | ตรวจอะไร |
 |---|---|---|
 | 03 | `SERIAL_NUMBER` | เลขซีเรียลจากโรงงานใน FRS `0x4B4B` |
-| 04 | `FRS_METADATA` | metadata ของ Rotation Vector — Q point ต้องได้ 14/12 |
+| 04 | `FRS_METADATA` | metadata ของ Rotation Vector — ต้องเจอคู่ Q point 14/12 |
 | 05 | `OSCILLATOR` | ชนิดออสซิลเลเตอร์ (command 10) |
 | 06 | `ERROR_QUEUE` | คิว error ภายในชิป (command 1) |
 | 07 | `SOFT_RESET` | reset ผ่าน executable channel แล้วชิปกลับมา |
@@ -183,7 +188,51 @@ pull-up ของ SDA/SCL ควรอยู่ที่ **2.2k–4.7k** ต่�
 | 23 | `SLEEP_WAKE` | sleep แล้วปลุกกลับผ่าน executable channel |
 | 24 | `STREAM_INTEGRITY` | timestamp และ sequence number ไม่ตกหล่น |
 
-ปิดท้ายด้วยป้าย PASS / FAIL
+ปิดท้ายด้วย **รายงานสรุป** ที่อ่านจบในหน้าจอเดียว ไม่ต้องเลื่อนขึ้นไปอ่านย้อน
+
+```
+==============================================================
+  รายงานผลการทดสอบ  /  TEST REPORT
+==============================================================
+  [ อุปกรณ์ที่ตรวจพบ ]
+    I2C address   : 0x4B   (ขา DI = HIGH)
+    Chip          : BNO085 / BNO086 (SH-2 MotionEngine)
+    Firmware      : 3.2.17
+    Part number   : 10003606
+    Build number  : 370
+    Images        : 2 ชุด (ชิปแจ้งเฟิร์มแวร์มาหลายอิมเมจ ปกติ)
+    Serial number : 0x0000000012AB34CD
+    Reset cause   : Power on reset
+    Authentic     : [✓] ของแท้ -- part number ตรงตารางเฟิร์มแวร์โรงงาน
+                    (เป็นการตรวจระดับโปรโตคอล ไม่ใช่ลายเซ็นดิจิทัล)
+--------------------------------------------------------------
+  [ ผลรายฟังก์ชัน 24 หัวข้อ ]
+    [✓] 01 DEVICE_DETECT       addr=0x4B ACK, พบทั้งหมด 1 ตัว
+    [✓] 02 IDENTITY            BNO08x แท้ fw 3.2.17 part=10003606
+    [✓] 03 SERIAL_NUMBER       serial=0x0000000012AB34CD
+    ...
+    [!] 11 MAGNETOMETER        |B|=112.40 uT อยู่นอกช่วงสนามโลก
+    ...
+    [✓] 24 STREAM_INTEGRITY    120 report ต่อเนื่อง ไม่มีขาด
+--------------------------------------------------------------
+  [ สรุป ]
+    [✓] ผ่าน      23 หัวข้อ
+    [!] เตือน      1 หัวข้อ   (สภาพแวดล้อมตอนทดสอบ ไม่ใช่บอร์ดเสีย)
+    [✗] ไม่ผ่าน    0 หัวข้อ
+        รวมทั้งหมด 24 หัวข้อ
+    หัวข้อที่เตือน   : 11-MAGNETOMETER
+==============================================================
+   #####    #     #####  #####
+   #    #  # #   #      #
+   #####  #####   ####   ####
+   #      #   #       #      #
+   #      #   #  #####  #####
+
+  >>> บอร์ดนี้ผ่านการทดสอบทุกหัวข้อ พร้อมส่งมอบ <<<
+==============================================================
+```
+
+`[✓]` = ผ่าน · `[!]` = เตือน · `[✗]` = ไม่ผ่าน
 
 พิมพ์ `r` แล้ว Enter เพื่อทดสอบซ้ำโดยไม่ต้องกด reset
 
@@ -196,7 +245,18 @@ pull-up ของ SDA/SCL ควรอยู่ที่ **2.2k–4.7k** ต่�
 
 ```
 #RESULT,<ลำดับ>,<ชื่อหัวข้อ>,<PASS|FAIL|WARN>,<รายละเอียด>
+#DEVICE,<addr>,<fw version>,<part number>,<build>,<serial>,<GENUINE|GENUINE_UNKNOWN_FW|SUSPECT|NO_RESPONSE>
 #VERDICT,<PASS|FAIL>,<จำนวน pass>,<จำนวน fail>,<จำนวน warn>
+```
+
+`#RESULT` ออกทันทีที่จบแต่ละหัวข้อ ส่วน `#DEVICE` กับ `#VERDICT` ออกท้ายสุดครั้งเดียว
+
+ตัวอย่างบรรทัดจริง
+
+```
+#RESULT,1,DEVICE_DETECT,PASS,addr=0x4B ACK, พบทั้งหมด 1 ตัว
+#DEVICE,0x4B,3.2.17,10003606,370,0x0000000012AB34CD,GENUINE
+#VERDICT,PASS,23,0,1
 ```
 
 ตัวอย่างโค้ดฝั่งเว็บ
@@ -206,9 +266,14 @@ pull-up ของ SDA/SCL ควรอยู่ที่ **2.2k–4.7k** ต่�
 if (line.startsWith('#RESULT,')) {
   const [, idx, name, status, detail] = line.split(',');
   addRow(idx, name, status, detail);          // status = PASS | FAIL | WARN
+} else if (line.startsWith('#DEVICE,')) {
+  const [, addr, fw, part, build, serial, auth] = line.split(',');
+  showDevice({ addr, fw, part, build, serial,
+               genuine: auth.startsWith('GENUINE') });
 } else if (line.startsWith('#VERDICT,')) {
   const [, verdict, pass, fail, warn] = line.split(',');
   showBadge(verdict === 'PASS');              // ไฟเขียว / ไฟแดง
+  showCounts({ pass, fail, warn });
 }
 ```
 
@@ -220,13 +285,18 @@ if (line.startsWith('#RESULT,')) {
 
 | หัวข้อ | สาเหตุที่พบบ่อย |
 |---|---|
+| `SERIAL_NUMBER` | ชิปไม่ได้ถูกโปรแกรม record `0x4B4B` มาจากโรงงาน พบได้บ่อยและไม่กระทบการใช้งาน |
+| `RAW_REPORTS` | เฟิร์มแวร์บางบิลด์ไม่ปล่อย raw report ออกทาง I2C ค่าที่ผ่าน fusion ยังครบ |
+| `FEATURE_CONFIG` | ชิปตอบ Get Feature แต่ echo `interval = 0` ทั้งที่ส่งรายงานจริง |
+| `IDENTITY` | part number ของอิมเมจใหม่กว่าตารางในไลบรารี |
+| `CALIBRATION_CMD` | MotionEngine ตอบ status ไม่เป็นศูนย์ |
+| `STREAM_INTEGRITY` | timestamp สลับลำดับเพราะ `loop()` ถูกงานอื่นแย่งไป ไม่ใช่ข้อมูลตกหล่น |
 | `ACCELEROMETER` | บอร์ดถูกขยับระหว่างวัด ทำให้ขนาดเวกเตอร์ไม่ใช่ 1 g |
 | `GYROSCOPE` | บอร์ดถูกขยับ หรือไจโรยังไม่ผ่าน calibration |
 | `MAGNETOMETER` | มีเหล็ก ลำโพง มอเตอร์ หรือสายไฟกระแสสูงอยู่ใกล้ |
 | `GEOMAGNETIC_RV` | เฟิร์มแวร์บางรุ่นให้อัตราต่ำมาก ต้องรอนานกว่านี้ |
 | `GYRO_INTEGRATED_RV` | I2C ช้าหรือสายยาว ทำให้อัตราไม่ถึงเป้า |
 | `EVENT_ENGINES` | ไม่ได้เคาะ ไม่ได้เขย่า เอนจินจึงไม่มีเหตุการณ์ให้รายงาน |
-| `STREAM_INTEGRITY` | ข้อมูลตกหล่นบนบัส — สายยาวเกินหรือ pull-up อ่อน |
 | `SLEEP_WAKE` | ชิปใช้เวลาตื่นนานกว่า 700 ms |
 
 **เกณฑ์ตัดสิน:** ผ่านก็ต่อเมื่อ **ไม่มีหัวข้อไหนขึ้น FAIL** เลย
@@ -237,7 +307,7 @@ if (line.startsWith('#RESULT,')) {
 
 ```bash
 cd PlatformIO
-cp examples/15_FactoryTest/main.cpp src/main.cpp
+cp examples/16_FactoryTest/main.cpp src/main.cpp
 pio run -e esp32dev
 # ผลลัพธ์อยู่ที่ .pio/build/esp32dev/
 #   firmware.factory.bin  = merged-firmware.bin (แฟลชที่ 0x0)

@@ -53,7 +53,7 @@ void setup() {
     Serial.print(F("FAILED: "));
     Serial.println(MassmoreBNO08x::statusToString(imu.getLastError()));
     Serial.println(F("Nothing answered. Either the sensor is not on this bus,"));
-    Serial.println(F("or SA0 selects 0x4A instead of 0x4B."));
+    Serial.println(F("or the DI pad selects 0x4A instead of 0x4B."));
     while (1) delay(100);
   }
 

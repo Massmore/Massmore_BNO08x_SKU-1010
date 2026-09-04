@@ -6,15 +6,17 @@
   The "hello world" of the BNO085/BNO086: enable the 9-axis fused rotation
   vector and print the quaternion at 100 Hz.
 
-  Wiring (I2C):
-    BNO08x        ESP32
-    ------        -----
-    VIN     ->    3V3
-    GND     ->    GND
-    SDA     ->    GPIO 21  (see SDA_PIN below)
-    SCL     ->    GPIO 22  (see SCL_PIN below)
-    INT     ->    GPIO 4   (optional but recommended)
-    RST     ->    GPIO 5   (optional)
+  Wiring (I2C) — pad names as printed on the Massmore Halley V2 board
+    Halley V2      ESP32
+    ---------      -----
+    5V or 3Vo ->   5V or 3V3
+    GND       ->   GND
+    SDA       ->   GPIO 21  (see SDA_PIN below)
+    SCL       ->   GPIO 22  (see SCL_PIN below)
+    INT       ->   GPIO 4   (optional but recommended)
+    RST       ->   GPIO 5   (optional)
+    DI        ->   leave open for 0x4B, tie to GND for 0x4A  (the chip's SA0)
+    BT, P0, P1 -> leave open (their pull-ups select I2C mode)
 
   Works on Arduino IDE with esp32 core 3.x, and on PlatformIO.
   Product: https://www.massmore.shop
@@ -50,7 +52,7 @@ void setup() {
   if (!imu.begin(MASSMORE_BNO08X_I2C_ADDR_DEF, Wire, INT_PIN, RST_PIN)) {
     Serial.print(F("BNO08x not found: "));
     Serial.println(MassmoreBNO08x::statusToString(imu.getLastError()));
-    Serial.println(F("Check wiring, and try address 0x4A if SA0 is tied low."));
+    Serial.println(F("Check wiring, and try address 0x4A if the DI pad is tied low."));
     while (1) delay(100);
   }
 

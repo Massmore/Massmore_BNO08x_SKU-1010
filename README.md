@@ -27,7 +27,7 @@ Arduino/PlatformIO library สำหรับโมดูล **Massmore Halley B
 - [Common API](#common-api)
 - [เลือก Rotation Vector](#เลือก-rotation-vector)
 - [Calibration และ Tare](#calibration-และ-tare)
-- [SPI และ UART-RVC](#spi-และ-uart-rvc)
+- [SPI, UART-SHTP และ UART-RVC](#spi-uart-shtp-และ-uart-rvc)
 - [Troubleshooting](#troubleshooting)
 - [References](#references)
 
@@ -47,7 +47,7 @@ BNO086 เป็น drop-in replacement ของ BNO085: pinout, host interface
 | Accelerometer fusion | standard resolution | 14-bit accelerometer fusion | BNO086 ได้ resolution ใน fusion path เพิ่มขึ้นโดยไม่ต้องเปลี่ยนคำสั่งอ่าน report |
 | Idle power ตาม CEVA test condition | ประมาณ 0.39 mW | ประมาณ 0.17 mW | BNO086 เหมาะกว่าเมื่อต้องอยู่ idle เป็นเวลานาน แต่ควรวัดทั้ง module ในวงจรจริงอีกครั้ง |
 | Dynamic Calibration | รองรับ | รองรับ | ใช้ `calibrateAll()` และ `saveCalibration()` หรือ example `05_Calibration` ได้เหมือนกัน |
-| Interactive Calibration | ไม่มี | เพิ่มเข้ามา | เป็น BNO086 capability; library v1.0.1 ยังไม่มี method ชื่อ Interactive Calibration โดยเฉพาะ |
+| Interactive Calibration | ไม่มี | เพิ่มเข้ามา | เป็น BNO086 capability; library v1.0.2 ยังไม่มี method ชื่อ Interactive Calibration โดยเฉพาะ |
 | UART-RVC Motion Intent/Request | reserved | รองรับ | ใช้ example `12_UART_RVC` แล้วอ่าน `motionIntent` และ `motionRequest` จาก `massmore_rvc_data_t` |
 
 ตัวอย่างอ่านค่า BNO086-only fields ใน UART-RVC:
@@ -63,7 +63,7 @@ if (rvc.read(data)) {
 }
 ```
 
-`MASSMORE_SENSOR_MOTION_REQUEST`, `MASSMORE_SENSOR_OPTICAL_FLOW` และ `MASSMORE_SENSOR_DEAD_RECKONING_POSE` ถูกประกาศเป็น BNO086-only report IDs ใน protocol definitions แต่ library v1.0.1 ยังไม่มี typed high-level enable/get API สำหรับ Optical Flow และ Dead Reckoning Pose จึงไม่ควรเขียนตัวอย่างโดยสมมติว่าเรียกใช้ได้แล้ว
+`MASSMORE_SENSOR_MOTION_REQUEST`, `MASSMORE_SENSOR_OPTICAL_FLOW` และ `MASSMORE_SENSOR_DEAD_RECKONING_POSE` ถูกประกาศเป็น BNO086-only report IDs ใน protocol definitions แต่ library v1.0.2 ยังไม่มี typed high-level enable/get API สำหรับ Optical Flow และ Dead Reckoning Pose จึงไม่ควรเขียนตัวอย่างโดยสมมติว่าเรียกใช้ได้แล้ว
 
 > **เลือกแบบสั้น:** เลือก BNO085 เมื่อต้องการ shared orientation/motion reports และมีสินค้ารุ่นนี้อยู่แล้ว เลือก BNO086 สำหรับ design ใหม่ที่ต้องการ lower idle power, 14-bit accelerometer fusion หรือ BNO086-specific UART-RVC fields
 
@@ -97,9 +97,35 @@ if (rvc.read(data)) {
 
 ![Massmore Halley V2 BNO08x pinout](docs/images/halley-v2-pinout.png)
 
-สำหรับ I2C ให้ใช้ `SCL`, `SDA`, `3.3V` และ `GND` ที่ Qwiic connector หรือ through-hole pads ด้านล่างของบอร์ด ขา `INT` และ `RST` แนะนำให้ต่อเข้ากับ ESP32 เพื่อให้ data-ready และ reset/recovery ทำงานได้สมบูรณ์ ส่วน `PS0`, `PS1`, `CS` และ `ADDR/MOSI` ใช้สำหรับเลือก interface หรือกำหนดโหมดตามช่วง reset
+สำหรับ I2C ให้ใช้ `SCL`, `SDA`, `3Vo` และ `GND` ที่ Qwiic connector หรือ through-hole pads ด้านล่างของบอร์ด ขา `INT` และ `RST` แนะนำให้ต่อเข้ากับ ESP32 เพื่อให้ data-ready และ reset/recovery ทำงานได้สมบูรณ์ ส่วน `P0`, `P1`, `CS` และ `DI` ใช้สำหรับเลือก interface หรือกำหนดโหมดตามช่วง reset
 
-> **ข้อควรระวัง:** ขา signal ทั้งหมดเป็น logic 3.3V แม้บอร์ดมีขาไฟ `5V` สำหรับวงจรจ่ายไฟ ห้ามป้อน 5V เข้าขา SDA, SCL, INT, RST หรือขาเลือกโหมด
+ชื่อขาที่พิมพ์บนบอร์ดกับชื่อในเอกสารของ CEVA เทียบกันได้ตามนี้ — โค้ดและ README ทั้งชุดใช้**ชื่อบนบอร์ด**เป็นหลัก
+
+| ขาบนบอร์ด | ชื่อในเอกสาร CEVA | หน้าที่ |
+|---|---|---|
+| `5V` | — | ไฟเข้า ผ่าน regulator XC6206 บนบอร์ด |
+| `3Vo` | VDD / VDDIO | ไฟ 3.3V เข้าหรือออก |
+| `GND` | GND | |
+| `SDA` | SDA · TX (UART) · MISO (SPI) | ผ่าน level shifter 2N7002 |
+| `SCL` | SCL · RX (UART) · SCK (SPI) | ผ่าน level shifter 2N7002 |
+| `INT` | H_INTN | data ready, active-low, 3.3V |
+| `RST` | NRST | reset, active-low, 3.3V |
+| `DI` | ADDR / SA0 (I2C) · MOSI (SPI) | เลือก address หรือรับข้อมูลใน SPI, 3.3V |
+| `CS` | H_CSN | chip select ของ SPI, 3.3V |
+| `BT` | BOOTN | LOW ตอน reset = เข้า bootloader (DFU) |
+| `P0` | PS0 | เลือกโหมด · ในโหมด SPI ทำหน้าที่ WAKE ด้วย |
+| `P1` | PS1 | เลือกโหมด |
+
+| โหมด | `P1` | `P0` |
+|---|---|---|
+| I2C | 0 | 0 |
+| SPI | 1 | 1 |
+| UART-SHTP | 1 | 0 |
+| UART-RVC | 0 | 1 |
+
+`P0`/`P1` ถูกอ่านตอนปล่อย `RST` เท่านั้น เปลี่ยนระหว่างที่ชิปทำงานอยู่ไม่มีผล
+
+> **ข้อควรระวัง:** มีเพียง `SDA` กับ `SCL` ที่ผ่าน level shifter 2N7002 บนบอร์ด ขา signal ที่เหลือ (`INT`, `RST`, `DI`, `CS`, `BT`, `P0`, `P1`) เป็น logic 3.3V ล้วน ห้ามป้อน 5V เข้าขาเหล่านี้
 
 ### Dimensions and board views
 
@@ -113,7 +139,7 @@ if (rvc.read(data)) {
 
 ![Massmore Halley V2 connected to ESP32 by I2C](docs/images/halley-v2-esp32-i2c-wiring.png)
 
-ตัวอย่างในภาพใช้ `SDA = GPIO 21`, `SCL = GPIO 22`, ไฟ 3.3V และกราวด์ร่วม ค่า address เริ่มต้นของ Massmore Halley BNO085/BNO086 คือ `0x4A`; หากไม่พบอุปกรณ์ให้ตรวจตำแหน่ง `ADDR/SA0` และลอง `0x4B`
+ตัวอย่างในภาพใช้ `SDA = GPIO 21`, `SCL = GPIO 22`, ไฟ 3.3V และกราวด์ร่วม ค่า address เริ่มต้นของ Massmore Halley BNO085/BNO086 คือ `0x4A`; หากไม่พบอุปกรณ์ให้ตรวจตำแหน่งขา `DI` และลอง `0x4B`
 
 ## Repository structure
 
@@ -121,14 +147,14 @@ if (rvc.read(data)) {
 Massmore_BNO08x/
 ├── ArduinoIDE/
 │   ├── src/                     ไลบรารี Arduino
-│   ├── examples/                ตัวอย่าง 15 ชุด
+│   ├── examples/                ตัวอย่าง 16 ชุด
 │   ├── test/                    host-side parser tests
 │   ├── library.properties
 │   └── keywords.txt
 ├── PlatformIO/
     ├── lib/Massmore_BNO08x/     ไลบรารีแบบ project-local
     ├── src/main.cpp             ตัวอย่างพร้อม build/upload
-    ├── examples/                ตัวอย่าง 15 ชุดแบบ main.cpp
+    ├── examples/                ตัวอย่าง 16 ชุดแบบ main.cpp
     └── platformio.ini           environment สำหรับ ESP32 หลายรุ่น
 └── firmware/                    เฟิร์มแวร์ Factory Test ที่ build แล้ว (.bin แฟลชผ่านเว็บ)
 ```
@@ -144,16 +170,16 @@ Massmore_BNO08x/
 
 ### Supply voltage
 
-สำหรับการเริ่มต้นให้ต่อ `VIN/VCC` ของโมดูล Massmore Halley กับ **3V3** ของ ESP32 และใช้ logic 3.3V เสมอ วิธีนี้ปลอดภัยกับทั้งชิปและสัญญาณ I2C
+สำหรับการเริ่มต้นให้ต่อขา `3Vo` ของโมดูล Massmore Halley กับ **3V3** ของ ESP32 (หรือจ่ายที่ขา `5V` แล้วให้ regulator บนบอร์ดจัดการ) และใช้ logic 3.3V เสมอ วิธีนี้ปลอดภัยกับทั้งชิปและสัญญาณ I2C
 
-หน้าสินค้า Massmore ระบุว่าโมดูลรับไฟ 3.3–5V แต่สเปกชิป BNO08x กำหนด VDD 2.4–3.6V และ VDDIO 1.7–3.6V ความสามารถรับไฟ 5V จึงขึ้นกับวงจร regulator/level shifting ของบอร์ดโมดูล ไม่ใช่คุณสมบัติของชิปโดยตรง ห้ามป้อน 5V เข้าขา SDA, SCL, INT, RST หรือขา logic อื่น
+หน้าสินค้า Massmore ระบุว่าโมดูลรับไฟ 3.3–5V แต่สเปกชิป BNO08x กำหนด VDD 2.4–3.6V และ VDDIO 1.7–3.6V ความสามารถรับไฟ 5V จึงขึ้นกับวงจร regulator/level shifting ของบอร์ดโมดูล ไม่ใช่คุณสมบัติของชิปโดยตรง ขา `SDA`/`SCL` ผ่าน level shifter 2N7002 จึงต่อกับโฮสต์ 5V ได้ แต่ห้ามป้อน 5V เข้าขา `INT`, `RST`, `DI`, `CS`, `BT`, `P0`, `P1` ซึ่งเป็น 3.3V ล้วน
 
 ### I2C address
 
-ตัวชิปรองรับ address `0x4A` เมื่อ SA0 เป็น LOW และ `0x4B` เมื่อ SA0 เป็น HIGH โดยอ่านสถานะ SA0 ตอน reset
+ตัวชิปรองรับ address `0x4A` เมื่อขา `DI` เป็น LOW และ `0x4B` เมื่อ `DI` เป็น HIGH โดยอ่านสถานะขานี้ตอน reset (`DI` คือขาที่ datasheet เรียกว่า SA0/ADDR)
 
 - หน้าสินค้า Massmore Halley ระบุค่าเริ่มต้น `0x4A`
-- macro `MASSMORE_BNO08X_I2C_ADDR_DEF` ในไลบรารีเวอร์ชัน 1.0.1 มีค่า `0x4B`
+- macro `MASSMORE_BNO08X_I2C_ADDR_DEF` ในไลบรารีเวอร์ชัน 1.0.2 มีค่า `0x4B`
 
 ดังนั้นตัวอย่างใน README นี้ใช้ `0x4A` ชัดเจน หากไม่พบเซ็นเซอร์ให้ลอง `0x4B` หรือรัน I2C scanner
 
@@ -167,14 +193,15 @@ Massmore_BNO08x/
 
 ### การต่อสายที่แนะนำ
 
-| Massmore Halley BNO08x | ESP32 Dev Module | หมายเหตุ |
+| Massmore Halley V2 | ESP32 Dev Module | หมายเหตุ |
 |---|---|---|
-| VIN/VCC | 3V3 | เริ่มต้นที่ 3.3V |
-| GND | GND | ต้องใช้กราวด์ร่วมกัน |
-| SDA | GPIO 21 | เปลี่ยนได้ตามบอร์ด |
-| SCL | GPIO 22 | เปลี่ยนได้ตามบอร์ด |
-| INT | GPIO 4 | แนะนำ |
-| RST | GPIO 5 | แนะนำ |
+| `3Vo` | 3V3 | เริ่มต้นที่ 3.3V (หรือจ่ายที่ขา `5V`) |
+| `GND` | GND | ต้องใช้กราวด์ร่วมกัน |
+| `SDA` | GPIO 21 | เปลี่ยนได้ตามบอร์ด |
+| `SCL` | GPIO 22 | เปลี่ยนได้ตามบอร์ด |
+| `INT` | GPIO 4 | แนะนำ |
+| `RST` | GPIO 5 | แนะนำ |
+| `DI` | ไม่ต่อ | ปล่อยลอย = `0x4B` · ลง GND = `0x4A` |
 
 > ESP32-S2/S3/C3/C6 อาจใช้พินไม่เหมือน ESP32 รุ่นคลาสสิก ตรวจ pinout ของบอร์ดและแก้ค่าคงที่ในโค้ดให้ตรงกับสายจริง
 
@@ -295,11 +322,12 @@ pio device monitor -b 115200
 | 12 | `UART_RVC` | heading + acceleration ที่ 100 Hz แบบ one-way stream |
 | 13 | `MultiReportAdvanced` | callback, batching, sleep/wake และหลาย report |
 | 14 | `FRS_Records` | อ่าน/เขียน Flash Record System |
-| 15 | `FactoryTest` | ชุดทดสอบสายการผลิต 24 หัวข้อ พร้อมไฟล์ `.bin` แฟลชผ่านเว็บ |
+| 15 | `UART_SHTP` | โปรโตคอล SH-2 เต็มรูปแบบผ่าน UART 3 Mbaud |
+| 16 | `FactoryTest` | ชุดทดสอบสายการผลิต 24 หัวข้อ พร้อมรายงานสรุป และไฟล์ `.bin` แฟลชผ่านเว็บ |
 
 ## เฟิร์มแวร์สำเร็จรูป
 
-โฟลเดอร์ [`firmware/`](firmware/) มีเฟิร์มแวร์ของตัวอย่าง `15_FactoryTest`
+โฟลเดอร์ [`firmware/`](firmware/) มีเฟิร์มแวร์ของตัวอย่าง `16_FactoryTest`
 ที่คอมไพล์ไว้แล้วสำหรับ **ESP32 DevKit (WROOM-32, Flash 4 MB)** ลูกค้าที่ไม่มี Arduino IDE
 หรือ VS Code แฟลชผ่านเว็บได้เลย
 
@@ -320,6 +348,7 @@ PASS / FAIL
 
 ```
 #RESULT,<ลำดับ>,<ชื่อหัวข้อ>,<PASS|FAIL|WARN>,<รายละเอียด>
+#DEVICE,<addr>,<fw version>,<part number>,<build>,<serial>,<GENUINE|GENUINE_UNKNOWN_FW|SUSPECT|NO_RESPONSE>
 #VERDICT,<PASS|FAIL>,<passed>,<failed>,<warned>
 ```
 
@@ -409,21 +438,36 @@ massmore_vec3_t mag   = imu.getMag();          // uT
 - `p` persist tare ลง flash
 - `c` clear tare ที่บันทึกไว้
 
-## SPI และ UART-RVC
+## SPI, UART-SHTP และ UART-RVC
+
+โหมดถูกเลือกจากสถานะขา `P1`/`P0` ตอนปล่อย `RST` เท่านั้น
 
 ### SPI
 
 - 4-wire SPI, Mode 3 (`CPOL=1`, `CPHA=1`), สูงสุด 3 MHz
+- ต่อ `SCL`→SCK, `SDA`→MISO, `DI`→MOSI, `CS`→chip select
 - ต้องต่อ `INT` และ `RST`
-- PS1 และ PS0 ต้อง HIGH ตั้งแต่ก่อน reset จนหลัง H_INTN assert ครั้งแรก
-- หลังเริ่มทำงาน PS0 เปลี่ยนหน้าที่เป็น active-low WAKE
+- `P1` และ `P0` ต้อง HIGH ตั้งแต่ก่อน reset จนหลัง H_INTN assert ครั้งแรก
+- หลังเริ่มทำงาน `P0` เปลี่ยนหน้าที่เป็น active-low WAKE
+- `DI` และ `CS` ไม่ผ่าน level shifter จึงเป็น 3.3V ล้วน
 
 เริ่มจากตัวอย่าง `11_SPI_Interface` และลด clock เป็น 1 MHz หากสายยาวหรือมี signal-integrity error
 
+### UART-SHTP
+
+- `P1`=HIGH, `P0`=LOW ตอน reset
+- `SDA` = TX ของเซ็นเซอร์ → RX ของโฮสต์ · `SCL` = RX ของเซ็นเซอร์ ← TX ของโฮสต์
+- บอดเรตตายตัว **3,000,000** เปลี่ยนไม่ได้
+- ได้ทุกอย่างเหมือน I2C/SPI: quaternion, calibration, tare, FRS, sleep
+- เร็วขนาดนี้และเป็นสัญญาณ push-pull จึงต้องต่อที่ **3.3V ตรง ๆ** (Qwiic หรือโฮสต์ 3.3V)
+  ไม่ควรผ่าน level shifter 2N7002 ซึ่งออกแบบมาสำหรับ I2C แบบ open-drain
+
+ใช้ `beginUART()` และตัวอย่าง `15_UART_SHTP`
+
 ### UART-RVC
 
-- PS1=LOW, PS0=HIGH ตอน reset
-- sensor TX ต่อ host RX, 115200 8N1
+- `P1`=LOW, `P0`=HIGH ตอน reset
+- `SDA` (TX ของเซ็นเซอร์) ต่อ RX ของโฮสต์, 115200 8N1
 - stream yaw/pitch/roll และ acceleration ที่ 100 Hz
 - ต้องใช้ external 32.768 kHz crystal/clock; internal oscillator ไม่แม่นพอสำหรับ UART
 - ไม่ได้ quaternion, report อื่น, calibration control หรือ tare ผ่าน stream นี้
@@ -441,8 +485,8 @@ massmore_vec3_t mag   = imu.getMag();          // uT
 3. พินในโค้ดตรงกับ GPIO จริง
 4. ลอง `0x4A` ก่อนสำหรับ Massmore Halley แล้วลอง `0x4B`
 5. ลด I2C เหลือ 100 kHz
-6. ต่อ INT/RST และรีเซ็ตใหม่หลังเปลี่ยน SA0/PS0/PS1
-7. ตรวจว่า BOOTN ไม่ถูกดึง LOW ตอน reset
+6. ต่อ `INT`/`RST` และรีเซ็ตใหม่หลังเปลี่ยน `DI`/`P0`/`P1`
+7. ตรวจว่าขา `BT` ไม่ถูกดึง LOW ตอน reset
 
 ### พบเซ็นเซอร์แต่ข้อมูลหยุดหรือเพี้ยน
 

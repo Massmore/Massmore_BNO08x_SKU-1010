@@ -3,7 +3,8 @@
  * @brief UART-RVC mode driver for the BNO085 / BNO086.
  *
  * UART-RVC ("Robot Vacuum Cleaner" mode) is the simplest way to use the sensor:
- * strap PS1 low and PS0 high, connect one wire from the sensor's TX to an RX on
+ * strap PS1 low and PS0 high (the P1 and P0 pads on the Massmore board),
+ * connect one wire from the sensor's TX to an RX on
  * your MCU, and the part streams heading and acceleration at 100 Hz with no
  * host commands at all. No SHTP, no configuration, no I2C.
  *
@@ -13,6 +14,8 @@
  *
  * Wiring (Datasheet [1] §1.2.5, Figure 1-23):
  *   PS1 -> GND, PS0 -> VDDIO, BOOTN -> 10k to VDDIO, sensor TX -> MCU RX.
+ *   On the Massmore Halley V2 board: P1 -> GND, P0 -> 3Vo, BT left open,
+ *   and the sensor's TX comes out on the SDA pad.
  *   The part needs its external crystal or clock in this mode; the internal
  *   oscillator is not accurate enough to drive the UART reliably.
  *
