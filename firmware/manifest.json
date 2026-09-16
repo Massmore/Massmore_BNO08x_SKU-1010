@@ -1,6 +1,6 @@
 {
-  "name": "Massmore BNO08x SKU-1010 Factory Test",
-  "version": "1.0.0",
+  "name": "Massmore_BNO08x Factory Test (SKU-1010)",
+  "version": "2.0.0",
   "home_assistant_domain": null,
   "funding_url": "https://www.massmore.shop",
   "new_install_prompt_erase": true,
@@ -8,7 +8,7 @@
     {
       "chipFamily": "ESP32",
       "parts": [
-        { "path": "esp32dev/merged-firmware.bin", "offset": 0 }
+        { "path": "bin/Massmore_BNO08x_FactoryTest_ESP32.bin", "offset": 0 }
       ]
     }
   ]

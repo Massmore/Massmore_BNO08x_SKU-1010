@@ -1,39 +1,27 @@
-# Operating system metadata
+# OS / editor
 .DS_Store
 Thumbs.db
-
-# Editor files
 .vscode/
 .idea/
 *.swp
 *~
 
-# PlatformIO and Arduino build output
+# PlatformIO / Arduino build output
 .pio/
 .pioenvs/
 .piolibdeps/
 build/
-dist/
 *.o
-*.obj
 *.elf
-*.hex
-*.bin
 *.map
 *.d
-*.dSYM/
 
-# ยกเว้นเฟิร์มแวร์ที่ตั้งใจ commit ขึ้น repo (ใช้แฟลชผ่านเว็บ)
-!firmware/**/*.bin
+# Build artefacts — except the pre-compiled Factory Test binaries
+*.bin
+!firmware/bin/*.bin
 
-# Logs, caches, and temporary files
+# Logs / caches
 *.log
 *.tmp
-*.temp
 *.bak
-*.pyc
 __pycache__/
-.cache/
-
-# Host-side test executable
-PlatformIO/test/testrun

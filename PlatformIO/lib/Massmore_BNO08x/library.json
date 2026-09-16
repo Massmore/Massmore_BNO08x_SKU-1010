@@ -1,33 +1,13 @@
 {
   "name": "Massmore_BNO08x",
-  "version": "1.0.2",
-  "description": "Complete driver for the BNO085 / BNO086 9-axis sensor fusion IMU. Full SH-2 / SHTP implementation over I2C, SPI and UART, plus UART-RVC. Every sensor report from basic quaternions to the personal activity classifier and the 1 kHz gyro-integrated rotation vector. Includes chip identity and authenticity verification, calibration, tare, FRS access and power management. No external dependencies, no dynamic allocation.",
-  "keywords": [
-    "bno085", "bno086", "bno08x", "imu", "9dof", "sensor-fusion",
-    "quaternion", "ahrs", "sh2", "shtp", "ceva", "bosch", "esp32",
-    "arduino", "massmore"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/massmore/Massmore_BNO08x_PlatformIO.git"
-  },
-  "authors": [
-    {
-      "name": "Massmore",
-      "url": "https://www.massmore.shop",
-      "maintainer": true
-    }
-  ],
+  "version": "2.0.0",
+  "description": "Driver for the Massmore BNO085 / BNO086 9-axis sensor fusion IMU module (SKU-1010). SH-2 / SHTP over I2C, SPI and UART, plus UART-RVC. Simple blocking API and non-blocking FSM API, chip identity verification, calibration, tare, FRS access. No external dependencies, no dynamic allocation.",
+  "keywords": ["bno085", "bno086", "bno08x", "imu", "9dof", "sensor-fusion", "quaternion", "sh2", "shtp", "esp32", "arduino", "massmore"],
+  "authors": [{ "name": "Massmore Biz Co., Ltd.", "url": "https://www.massmore.shop", "maintainer": true }],
   "license": "MIT",
   "homepage": "https://www.massmore.shop/products/2141d3bf-9d0f-4837-badf-a36bcda61638",
   "frameworks": "arduino",
   "platforms": "*",
   "headers": ["Massmore_BNO08x.h", "Massmore_BNO08x_RVC.h"],
-  "export": {
-    "exclude": [".pio", ".vscode", "docs/_build"]
-  },
-  "build": {
-    "srcDir": "src",
-    "srcFilter": ["+<*.c>", "+<*.cpp>", "+<*.h>"]
-  }
+  "build": { "srcDir": "src" }
 }

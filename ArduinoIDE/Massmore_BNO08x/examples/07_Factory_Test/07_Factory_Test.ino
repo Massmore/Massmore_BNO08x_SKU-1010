@@ -1,4 +1,3 @@
-#include <Arduino.h>
 /*
   07_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
   ---------------------------------------------------------------------------

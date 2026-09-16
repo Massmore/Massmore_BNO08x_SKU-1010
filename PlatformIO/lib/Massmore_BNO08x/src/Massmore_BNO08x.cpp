@@ -1,20 +1,64 @@
 /*!
  * @file  Massmore_BNO08x.cpp
- * @brief Implementation of the Massmore BNO085 / BNO086 driver.
+ * @brief Implementation ของ driver Massmore BNO085 / BNO086
  *
- * Protocol references, all cited inline where used:
+ * โครงสร้างไฟล์ (SECTION):
+ *   1  Start-up             — begin() / beginSPI() / beginUART() + auto address fallback
+ *   2  SHTP transport       — รับ/ส่ง packet บน I2C, SPI, UART
+ *   3  Main loop            — update() / updateAll() / new-report flags
+ *   4  Packet parsing       — ถอดรหัส sensor report ทุกชนิด
+ *   5  Identity             — Product ID, verifyChip(), serial number
+ *   6  Enabling sensors     — Set Feature
+ *   7  Data accessors       — quaternion → Euler และ getter อื่น ๆ
+ *   8  Commands             — calibration, tare, reset, sleep
+ *   9  FRS                  — flash record system read/write
+ *  10  Massmore standard API — Simple Blocking API + verifyChipID/isGenuine
+ *
+ * Protocol references (อ้างอิงในโค้ดตามหมายเลข):
  *   [1] BNO08X Datasheet, CEVA 1000-3927 v1.16
  *   [2] SH-2 Reference Manual, CEVA 1000-3625
  *   [3] Sensor Hub Transport Protocol, CEVA 1000-3535 v1.10
  *   [4] BNO080/BNO085 Tare Function Usage Guide, CEVA 1000-4045 v1.3
  *   [5] BNO080/BNO085 Sensor Calibration Procedure, CEVA 1000-4044
  *
+ * Massmore_BNO08x — Designed and Manufactured by Massmore (https://www.massmore.shop)
  * SPDX-License-Identifier: MIT
  */
 
 #include "Massmore_BNO08x.h"
 #include <stdarg.h>
 #include <math.h>
+#include <string.h>
+
+/* ---------------------------------------------------------------------------
+ * AVR (ATmega328P, SRAM 2 KB): เก็บ string literal และตารางค่าคงที่ไว้ใน flash
+ * (PROGMEM) แทน SRAM — ฟังก์ชัน *ToString() คัดลอกข้อความลง buffer เล็ก ๆ หนึ่งชุด
+ * ก่อนคืน const char* (ค่าที่คืนใช้ได้จนกว่าจะเรียก *ToString() ครั้งถัดไป)
+ * บน ESP32 ทุกอย่างอยู่ใน flash อยู่แล้ว macro จึงคืน literal ตรง ๆ
+ * ------------------------------------------------------------------------- */
+#if defined(__AVR__)
+  #include <avr/pgmspace.h>
+  static char s_massmoreStrBuf[72];
+  static const char *massmoreFromFlash(const char *pgm) {
+      strncpy_P(s_massmoreStrBuf, pgm, sizeof(s_massmoreStrBuf) - 1);
+      s_massmoreStrBuf[sizeof(s_massmoreStrBuf) - 1] = '\0';
+      return s_massmoreStrBuf;
+  }
+  #define MASSMORE_BNO08X_STR(lit) massmoreFromFlash(PSTR(lit))
+  #define MASSMORE_BNO08X_VSNPRINTF vsnprintf_P
+#else
+  #ifndef PSTR
+    #define PSTR(s) (s)
+  #endif
+  #ifndef PROGMEM
+    #define PROGMEM
+  #endif
+  #ifndef pgm_read_byte
+    #define pgm_read_byte(p) (*(const uint8_t *)(p))
+  #endif
+  #define MASSMORE_BNO08X_STR(lit) (lit)
+  #define MASSMORE_BNO08X_VSNPRINTF vsnprintf
+#endif
 
 /* ---------------------------------------------------------------------------
  * How many bytes we can move in one I2C transaction on this core.
@@ -24,24 +68,24 @@
 #if defined(ARDUINO_ARCH_ESP32)
   /* esp32 Arduino core 2.x and 3.x both expose a 128 byte Wire buffer and let
    * us grow it at runtime. */
-  #define MASSMORE_I2C_BUF 128
+  #define MASSMORE_BNO08X_I2C_BUF 128
 #elif defined(I2C_BUFFER_LENGTH)
-  #define MASSMORE_I2C_BUF I2C_BUFFER_LENGTH
+  #define MASSMORE_BNO08X_I2C_BUF I2C_BUFFER_LENGTH
 #elif defined(BUFFER_LENGTH)
-  #define MASSMORE_I2C_BUF BUFFER_LENGTH
+  #define MASSMORE_BNO08X_I2C_BUF BUFFER_LENGTH
 #elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_STM32)
-  #define MASSMORE_I2C_BUF 128
+  #define MASSMORE_BNO08X_I2C_BUF 128
 #else
-  #define MASSMORE_I2C_BUF 32
+  #define MASSMORE_BNO08X_I2C_BUF 32
 #endif
 
 /* SHTP advertisement TLV tags — [3] §5.2 and SH-2 app tags */
-#define MASSMORE_TAG_NULL              0
-#define MASSMORE_TAG_GUID              1
-#define MASSMORE_TAG_APP_NAME          8
-#define MASSMORE_TAG_CHANNEL_NAME      9
-#define MASSMORE_TAG_SH2_VERSION       0x80
-#define MASSMORE_TAG_SH2_REPORT_LENS   0x81
+#define MASSMORE_BNO08X_TAG_NULL              0
+#define MASSMORE_BNO08X_TAG_GUID              1
+#define MASSMORE_BNO08X_TAG_APP_NAME          8
+#define MASSMORE_BNO08X_TAG_CHANNEL_NAME      9
+#define MASSMORE_BNO08X_TAG_SH2_VERSION       0x80
+#define MASSMORE_BNO08X_TAG_SH2_REPORT_LENS   0x81
 
 /* ---------------------------------------------------------------------------
  * Fallback report length table.
@@ -51,7 +95,7 @@
  * booted long after the sensor did). Lengths are from [2] §6.5 and include the
  * 4 byte report prefix (id, sequence, status, delay).
  * ------------------------------------------------------------------------- */
-static const uint8_t kFallbackReportLen[0x40] = {
+static const uint8_t kFallbackReportLen[0x40] PROGMEM = {
     /* 0x00 */ 0,
     /* 0x01 */ 10, /* accelerometer            */
     /* 0x02 */ 10, /* gyroscope calibrated     */
@@ -103,7 +147,7 @@ static const uint8_t kFallbackReportLen[0x40] = {
  * CEVA ships the BNO085 and BNO086 with the same SH-2 application image, part
  * number 10003606. If CEVA publishes a new build with a different part number
  * this table will not know it, which is why an unrecognised number is reported
- * as MASSMORE_AUTH_UNKNOWN_FW rather than as a failure.
+ * as MASSMORE_BNO08X_AUTH_UNKNOWN_FW rather than as a failure.
  * ------------------------------------------------------------------------- */
 static const uint32_t kKnownPartNumbers[] = {
     10003606UL,   /* BNO080 / BNO085 / BNO086 SH-2 application */
@@ -119,24 +163,25 @@ static const uint8_t kKnownPartCount =
 /* ===========================================================================
  * Construction
  * ========================================================================= */
-MassmoreBNO08x::MassmoreBNO08x() {
-    _busType  = MASSMORE_BUS_NONE;
+Massmore_BNO08x::Massmore_BNO08x() {
+    _busType  = MASSMORE_BNO08X_BUS_NONE;
     _i2c      = nullptr;
     _spi      = nullptr;
     _uart     = nullptr;
     _dbg      = nullptr;
     _i2cAddr  = MASSMORE_BNO08X_I2C_ADDR_DEF;
-    _i2cChunk = MASSMORE_I2C_BUF;
+    _i2cChunk = MASSMORE_BNO08X_I2C_BUF;
     _spiSpeed = 3000000UL;
     _csPin = _intPin = _rstPin = _wakePin = -1;
     _reportCb    = nullptr;
     _reportCbCtx = nullptr;
-    _lastError   = MASSMORE_OK;
+    _lastError   = MASSMORE_BNO08X_OK;
+    _lastAuth    = MASSMORE_BNO08X_AUTH_NO_RESPONSE;
     memset(_advertReportLen, 0, sizeof(_advertReportLen));
     resetState();
 }
 
-void MassmoreBNO08x::resetState() {
+void Massmore_BNO08x::resetState() {
     _rxLen = 0; _rxChannel = 0; _rxSeq = 0;
     _rxHostMicros = 0;
     _productIdCount = 0;
@@ -169,7 +214,7 @@ void MassmoreBNO08x::resetState() {
     _sleepState = 0;
     _sigMotion = _flip = _pickup = _tilt = _pocket = _circle = false;
     _stepDetected = _stabilityChanged = false;
-    _stability = MASSMORE_STABILITY_UNKNOWN;
+    _stability = MASSMORE_BNO08X_STABILITY_UNKNOWN;
     _activityMostLikely = 0;
     memset(_activityConfidence, 0, sizeof(_activityConfidence));
 
@@ -197,12 +242,12 @@ void MassmoreBNO08x::resetState() {
     _getFeatureResponse = false;
 }
 
-void MassmoreBNO08x::dbgPrintf(const char *fmt, ...) {
+void Massmore_BNO08x::dbgPrintf(const char *fmt, ...) {
     if (!_dbg) return;
     char buf[128];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    MASSMORE_BNO08X_VSNPRINTF(buf, sizeof(buf), fmt, ap);   /* fmt อยู่ใน flash (PSTR) */
     va_end(ap);
     _dbg->print(buf);
 }
@@ -214,7 +259,7 @@ void MassmoreBNO08x::dbgPrintf(const char *fmt, ...) {
  * time, so with no INT pin we fall back to 300 ms, the value both the Adafruit
  * and SparkFun drivers settled on.
  */
-void MassmoreBNO08x::applyResetSettleDelay() {
+void Massmore_BNO08x::applyResetSettleDelay() {
     if (_intPin >= 0) {
         uint32_t start = millis();
         while (digitalRead(_intPin) == HIGH && (millis() - start) < 300) {
@@ -227,12 +272,12 @@ void MassmoreBNO08x::applyResetSettleDelay() {
 }
 
 /* ===========================================================================
- * SECTION 1 — Start-up
+ * SECTION 1 — Start-up (เริ่มต้น bus ที่ sketch เตรียมไว้แล้ว)
  * ========================================================================= */
 
-bool MassmoreBNO08x::begin(uint8_t address, TwoWire &wirePort,
+bool Massmore_BNO08x::begin(uint8_t address, TwoWire &wirePort,
                            int8_t intPin, int8_t rstPin) {
-    _busType = MASSMORE_BUS_I2C;
+    _busType = MASSMORE_BNO08X_BUS_I2C;
     _i2c     = &wirePort;
     _i2cAddr = address;
     _intPin  = intPin;
@@ -250,10 +295,10 @@ bool MassmoreBNO08x::begin(uint8_t address, TwoWire &wirePort,
 #if defined(ARDUINO_ARCH_ESP32)
     /* esp32 core >= 2.0.5 (and all of 3.x) can grow the Wire buffer, which
      * lets us pull a whole cargo in fewer transactions. Harmless if it fails. */
-    _i2c->setBufferSize(MASSMORE_I2C_BUF);
+    _i2c->setBufferSize(MASSMORE_BNO08X_I2C_BUF);
     _i2c->setTimeOut(50);
 #endif
-    _i2cChunk = MASSMORE_I2C_BUF;
+    _i2cChunk = MASSMORE_BNO08X_I2C_BUF;
     if (_i2cChunk < 8) _i2cChunk = 8;          /* sanity floor */
 
     /* Hardware reset if we can, otherwise ask for a soft one. */
@@ -264,13 +309,22 @@ bool MassmoreBNO08x::begin(uint8_t address, TwoWire &wirePort,
     }
     applyResetSettleDelay();
 
-    /* Is anything there at all? */
-    _i2c->beginTransmission(_i2cAddr);
-    if (_i2c->endTransmission() != 0) {
-        dbgPrintf("[massmore] no ACK at 0x%02X\n", _i2cAddr);
-        _lastError = MASSMORE_ERR_NO_DEVICE;
-        _busType   = MASSMORE_BUS_NONE;
-        return false;
+    /* มีอุปกรณ์ ACK ที่ address นี้ไหม? ถ้าไม่ ให้ลอง address อีกตัว (0x4A <-> 0x4B)
+     * เพราะทั้งสองค่าคือ BNO08x ตัวเดียวกันที่ต่างกันแค่ระดับขา DI (SA0) */
+    if (!i2cProbe(_i2cAddr)) {
+        uint8_t alt = (_i2cAddr == MASSMORE_BNO08X_I2C_ADDR_LOW)
+                          ? MASSMORE_BNO08X_I2C_ADDR_HIGH
+                          : MASSMORE_BNO08X_I2C_ADDR_LOW;
+        if ((address == MASSMORE_BNO08X_I2C_ADDR_LOW || address == MASSMORE_BNO08X_I2C_ADDR_HIGH)
+            && i2cProbe(alt)) {
+            dbgPrintf(PSTR("[massmore] no ACK at 0x%02X, found device at 0x%02X\n"), _i2cAddr, alt);
+            _i2cAddr = alt;
+        } else {
+            dbgPrintf(PSTR("[massmore] no ACK at 0x%02X\n"), _i2cAddr);
+            _lastError = MASSMORE_BNO08X_ERR_NO_DEVICE;
+            _busType   = MASSMORE_BNO08X_BUS_NONE;
+            return false;
+        }
     }
 
     /* Drain the start-up chatter: SHTP advertisement, unsolicited reset
@@ -281,28 +335,28 @@ bool MassmoreBNO08x::begin(uint8_t address, TwoWire &wirePort,
         if (_productId.valid) break;
     }
 
-    if (requestProductID(300) != MASSMORE_OK) {
-        dbgPrintf("[massmore] no product ID response\n");
-        _lastError = MASSMORE_ERR_NO_DEVICE;
-        _busType   = MASSMORE_BUS_NONE;
+    if (requestProductID(300) != MASSMORE_BNO08X_OK) {
+        dbgPrintf(PSTR("[massmore] no product ID response\n"));
+        _lastError = MASSMORE_BNO08X_ERR_NO_DEVICE;
+        _busType   = MASSMORE_BNO08X_BUS_NONE;
         return false;
     }
 
-    _lastError = MASSMORE_OK;
+    _lastError = MASSMORE_BNO08X_OK;
     return true;
 }
 
-bool MassmoreBNO08x::beginSPI(int8_t csPin, int8_t intPin, int8_t rstPin,
+bool Massmore_BNO08x::beginSPI(int8_t csPin, int8_t intPin, int8_t rstPin,
                               int8_t wakePin, SPIClass &spiPort,
                               uint32_t speedHz) {
     if (csPin < 0 || intPin < 0 || rstPin < 0) {
         /* SPI mode is latched by the state of PS0/PS1 at the release of NRST,
          * and SHTP over SPI has no way to poll, so both pins are mandatory. */
-        _lastError = MASSMORE_ERR_BAD_PARAM;
+        _lastError = MASSMORE_BNO08X_ERR_BAD_PARAM;
         return false;
     }
 
-    _busType  = MASSMORE_BUS_SPI;
+    _busType  = MASSMORE_BNO08X_BUS_SPI;
     _spi      = &spiPort;
     _csPin    = csPin;
     _intPin   = intPin;
@@ -333,18 +387,18 @@ bool MassmoreBNO08x::beginSPI(int8_t csPin, int8_t intPin, int8_t rstPin,
         if (_productId.valid) break;
     }
 
-    if (requestProductID(400) != MASSMORE_OK) {
-        _lastError = MASSMORE_ERR_NO_DEVICE;
-        _busType   = MASSMORE_BUS_NONE;
+    if (requestProductID(400) != MASSMORE_BNO08X_OK) {
+        _lastError = MASSMORE_BNO08X_ERR_NO_DEVICE;
+        _busType   = MASSMORE_BNO08X_BUS_NONE;
         return false;
     }
 
-    _lastError = MASSMORE_OK;
+    _lastError = MASSMORE_BNO08X_OK;
     return true;
 }
 
-bool MassmoreBNO08x::beginUART(Stream &serialPort, int8_t intPin, int8_t rstPin) {
-    _busType = MASSMORE_BUS_UART;
+bool Massmore_BNO08x::beginUART(Stream &serialPort, int8_t intPin, int8_t rstPin) {
+    _busType = MASSMORE_BNO08X_BUS_UART;
     _uart    = &serialPort;
     _intPin  = intPin;
     _rstPin  = rstPin;
@@ -366,27 +420,27 @@ bool MassmoreBNO08x::beginUART(Stream &serialPort, int8_t intPin, int8_t rstPin)
         if (_productId.valid) break;
     }
 
-    if (requestProductID(400) != MASSMORE_OK) {
-        _lastError = MASSMORE_ERR_NO_DEVICE;
-        _busType   = MASSMORE_BUS_NONE;
+    if (requestProductID(400) != MASSMORE_BNO08X_OK) {
+        _lastError = MASSMORE_BNO08X_ERR_NO_DEVICE;
+        _busType   = MASSMORE_BNO08X_BUS_NONE;
         return false;
     }
-    _lastError = MASSMORE_OK;
+    _lastError = MASSMORE_BNO08X_OK;
     return true;
 }
 
 /* ===========================================================================
- * SECTION 2 — SHTP transport
+ * SECTION 2 — SHTP transport (รับ/ส่ง packet ระดับ bus)
  * ========================================================================= */
 
-bool MassmoreBNO08x::dataAvailable() {
-    if (_busType == MASSMORE_BUS_NONE) return false;
+bool Massmore_BNO08x::dataAvailable() {
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return false;
     if (_intPin >= 0) return digitalRead(_intPin) == LOW;  /* H_INTN active low */
-    if (_busType == MASSMORE_BUS_UART) return _uart->available() > 0;
+    if (_busType == MASSMORE_BNO08X_BUS_UART) return _uart->available() > 0;
     return true;   /* no INT pin on I2C: we have to try a read to find out */
 }
 
-bool MassmoreBNO08x::waitForInt(uint32_t timeoutMs) {
+bool Massmore_BNO08x::waitForInt(uint32_t timeoutMs) {
     if (_intPin < 0) { delay(1); return true; }
     uint32_t start = millis();
     while (digitalRead(_intPin) == HIGH) {
@@ -401,7 +455,7 @@ bool MassmoreBNO08x::waitForInt(uint32_t timeoutMs) {
  * the 4 byte header first to learn the cargo length, then pull the payload in
  * chunks. The hub repeats a header at the start of every chunk; we discard it.
  */
-bool MassmoreBNO08x::i2cReceivePacket() {
+bool Massmore_BNO08x::i2cReceivePacket() {
     uint8_t got = _i2c->requestFrom((uint8_t)_i2cAddr, (uint8_t)4);
     if (got != 4) return false;
 
@@ -446,7 +500,7 @@ bool MassmoreBNO08x::i2cReceivePacket() {
  * SHTP over SPI — [1] §1.2.4.2, CPOL=1/CPHA=1 (SPI_MODE3), MSB first.
  * Unlike I2C, one chip select assertion can carry the whole cargo.
  */
-bool MassmoreBNO08x::spiReceivePacket() {
+bool Massmore_BNO08x::spiReceivePacket() {
     if (_intPin >= 0 && digitalRead(_intPin) == HIGH) return false;
 
     _spi->beginTransaction(SPISettings(_spiSpeed, MSBFIRST, SPI_MODE3));
@@ -485,7 +539,7 @@ bool MassmoreBNO08x::spiReceivePacket() {
  * SHTP over UART — [3] §4. Frames are 0x7E <protocol id> <escaped data> 0x7E,
  * with 0x7D as the control escape (next byte XOR 0x20). Protocol ID 1 = SHTP.
  */
-bool MassmoreBNO08x::uartReceivePacket() {
+bool Massmore_BNO08x::uartReceivePacket() {
     if (!_uart->available()) return false;
 
     uint32_t deadline = millis() + 20;
@@ -537,11 +591,11 @@ bool MassmoreBNO08x::uartReceivePacket() {
     return true;
 }
 
-bool MassmoreBNO08x::receivePacket() {
+bool Massmore_BNO08x::receivePacket() {
     switch (_busType) {
-        case MASSMORE_BUS_I2C:  return i2cReceivePacket();
-        case MASSMORE_BUS_SPI:  return spiReceivePacket();
-        case MASSMORE_BUS_UART: return uartReceivePacket();
+        case MASSMORE_BNO08X_BUS_I2C:  return i2cReceivePacket();
+        case MASSMORE_BNO08X_BUS_SPI:  return spiReceivePacket();
+        case MASSMORE_BNO08X_BUS_UART: return uartReceivePacket();
         default:                return false;
     }
 }
@@ -550,10 +604,10 @@ bool MassmoreBNO08x::receivePacket() {
  * The caller has already placed the payload at _txBuf[4..]; we fill in the
  * 4 byte SHTP header — [1] Figure 1-26 — and push it out.
  * ------------------------------------------------------------------------ */
-bool MassmoreBNO08x::txPacket(uint8_t channel, uint16_t payloadLen) {
-    if (channel > 5) { _lastError = MASSMORE_ERR_BAD_PARAM; return false; }
+bool Massmore_BNO08x::txPacket(uint8_t channel, uint16_t payloadLen) {
+    if (channel > 5) { _lastError = MASSMORE_BNO08X_ERR_BAD_PARAM; return false; }
     if (payloadLen + 4 > MASSMORE_BNO08X_MAX_PACKET) {
-        _lastError = MASSMORE_ERR_BAD_PARAM;
+        _lastError = MASSMORE_BNO08X_ERR_BAD_PARAM;
         return false;
     }
 
@@ -564,26 +618,26 @@ bool MassmoreBNO08x::txPacket(uint8_t channel, uint16_t payloadLen) {
     _txBuf[3] = _seqNum[channel]++;
 
     switch (_busType) {
-        case MASSMORE_BUS_I2C:  return i2cSendPacket(channel, payloadLen);
-        case MASSMORE_BUS_SPI:  return spiSendPacket(channel, payloadLen);
-        case MASSMORE_BUS_UART: return uartSendPacket(channel, payloadLen);
-        default: _lastError = MASSMORE_ERR_NOT_READY; return false;
+        case MASSMORE_BNO08X_BUS_I2C:  return i2cSendPacket(channel, payloadLen);
+        case MASSMORE_BNO08X_BUS_SPI:  return spiSendPacket(channel, payloadLen);
+        case MASSMORE_BNO08X_BUS_UART: return uartSendPacket(channel, payloadLen);
+        default: _lastError = MASSMORE_BNO08X_ERR_NOT_READY; return false;
     }
 }
 
-bool MassmoreBNO08x::i2cSendPacket(uint8_t channel, uint16_t payloadLen) {
+bool Massmore_BNO08x::i2cSendPacket(uint8_t channel, uint16_t payloadLen) {
     (void)channel;
     uint16_t total = payloadLen + 4;
     _i2c->beginTransmission(_i2cAddr);
     _i2c->write(_txBuf, total);
     if (_i2c->endTransmission() != 0) {
-        _lastError = MASSMORE_ERR_IO;
+        _lastError = MASSMORE_BNO08X_ERR_IO;
         return false;
     }
     return true;
 }
 
-bool MassmoreBNO08x::spiSendPacket(uint8_t channel, uint16_t payloadLen) {
+bool Massmore_BNO08x::spiSendPacket(uint8_t channel, uint16_t payloadLen) {
     (void)channel;
     uint16_t total = payloadLen + 4;
 
@@ -610,7 +664,7 @@ bool MassmoreBNO08x::spiSendPacket(uint8_t channel, uint16_t payloadLen) {
     return true;
 }
 
-bool MassmoreBNO08x::uartSendPacket(uint8_t channel, uint16_t payloadLen) {
+bool Massmore_BNO08x::uartSendPacket(uint8_t channel, uint16_t payloadLen) {
     (void)channel;
     uint16_t total = payloadLen + 4;
 
@@ -634,27 +688,27 @@ bool MassmoreBNO08x::uartSendPacket(uint8_t channel, uint16_t payloadLen) {
     return true;
 }
 
-massmore_status_t MassmoreBNO08x::sendPacket(uint8_t channel,
+Massmore_BNO08x_status_t Massmore_BNO08x::sendPacket(uint8_t channel,
                                              const uint8_t *data, uint16_t len) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
     if (!data || len == 0 || len + 4 > MASSMORE_BNO08X_MAX_PACKET)
-        return (_lastError = MASSMORE_ERR_BAD_PARAM);
+        return (_lastError = MASSMORE_BNO08X_ERR_BAD_PARAM);
     memcpy(&_txBuf[4], data, len);
-    return txPacket(channel, len) ? MASSMORE_OK : _lastError;
+    return txPacket(channel, len) ? MASSMORE_BNO08X_OK : _lastError;
 }
 
-const uint8_t *MassmoreBNO08x::getRawPacket(uint16_t &len, uint8_t &channel) const {
+const uint8_t *Massmore_BNO08x::getRawPacket(uint16_t &len, uint8_t &channel) const {
     len = _rxLen;
     channel = _rxChannel;
     return _rxBuf;
 }
 
 /* ===========================================================================
- * SECTION 3 — The main loop
+ * SECTION 3 — Main loop (Non-blocking update)
  * ========================================================================= */
 
-bool MassmoreBNO08x::update() {
-    if (_busType == MASSMORE_BUS_NONE) return false;
+bool Massmore_BNO08x::update() {
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return false;
     if (_intPin >= 0 && digitalRead(_intPin) == HIGH) return false;
     if (!receivePacket()) return false;
     /* Anchor for the report timestamps in this packet. Taken before parsing so
@@ -664,24 +718,24 @@ bool MassmoreBNO08x::update() {
     return true;
 }
 
-uint8_t MassmoreBNO08x::updateAll(uint8_t maxPackets) {
+uint8_t Massmore_BNO08x::updateAll(uint8_t maxPackets) {
     uint8_t n = 0;
     while (n < maxPackets && update()) n++;
     return n;
 }
 
-void MassmoreBNO08x::setReportCallback(void (*cb)(uint8_t, void *), void *ctx) {
+void Massmore_BNO08x::setReportCallback(void (*cb)(uint8_t, void *), void *ctx) {
     _reportCb = cb;
     _reportCbCtx = ctx;
 }
 
-void MassmoreBNO08x::markNew(uint8_t id) {
+void Massmore_BNO08x::markNew(uint8_t id) {
     if (id < 0x40) _newFlags[id >> 3] |= (uint8_t)(1u << (id & 7));
     _lastReportId = id;
     if (_reportCb) _reportCb(id, _reportCbCtx);
 }
 
-bool MassmoreBNO08x::hasNewReport(uint8_t id) {
+bool Massmore_BNO08x::hasNewReport(uint8_t id) {
     if (id >= 0x40) return false;
     uint8_t mask = (uint8_t)(1u << (id & 7));
     bool set = (_newFlags[id >> 3] & mask) != 0;
@@ -689,33 +743,33 @@ bool MassmoreBNO08x::hasNewReport(uint8_t id) {
     return set;
 }
 
-bool MassmoreBNO08x::peekNewReport(uint8_t id) const {
+bool Massmore_BNO08x::peekNewReport(uint8_t id) const {
     if (id >= 0x40) return false;
     return (_newFlags[id >> 3] & (uint8_t)(1u << (id & 7))) != 0;
 }
 
-void MassmoreBNO08x::clearNewFlags() {
+void Massmore_BNO08x::clearNewFlags() {
     memset(_newFlags, 0, sizeof(_newFlags));
 }
 
-void MassmoreBNO08x::setAccuracy(uint8_t id, uint8_t acc) {
+void Massmore_BNO08x::setAccuracy(uint8_t id, uint8_t acc) {
     if (id < 0x40) _accuracyTable[id] = acc & 0x03;
 }
 
-massmore_accuracy_t MassmoreBNO08x::getAccuracy(uint8_t sensorId) const {
-    if (sensorId >= 0x40) return MASSMORE_ACCURACY_UNRELIABLE;
-    return (massmore_accuracy_t)_accuracyTable[sensorId];
+Massmore_BNO08x_accuracy_t Massmore_BNO08x::getAccuracy(uint8_t sensorId) const {
+    if (sensorId >= 0x40) return MASSMORE_BNO08X_ACCURACY_UNRELIABLE;
+    return (Massmore_BNO08x_accuracy_t)_accuracyTable[sensorId];
 }
 
 /* ===========================================================================
- * SECTION 4 — Packet parsing
+ * SECTION 4 — Packet parsing (ถอดรหัส report)
  * ========================================================================= */
 
-void MassmoreBNO08x::parsePacket() {
+void Massmore_BNO08x::parsePacket() {
     if (_rxLen == 0) return;
 
     switch (_rxChannel) {
-    case MASSMORE_CH_COMMAND:
+    case MASSMORE_BNO08X_CH_COMMAND:
         /* SHTP advertisement (response to Get Advertisement, command 0).
          * A genuine BNO08x publishes the exact length of every report it
          * supports here — [3] §5.2 — which is far better than guessing. */
@@ -724,11 +778,11 @@ void MassmoreBNO08x::parsePacket() {
             while (i + 1 < _rxLen) {
                 uint8_t tag = _rxBuf[i];
                 uint8_t len = _rxBuf[i + 1];
-                if (tag == MASSMORE_TAG_NULL && len == 0) break;
+                if (tag == MASSMORE_BNO08X_TAG_NULL && len == 0) break;
                 uint16_t val = i + 2;
                 if (val + len > _rxLen) break;
 
-                if (tag == MASSMORE_TAG_SH2_REPORT_LENS) {
+                if (tag == MASSMORE_BNO08X_TAG_SH2_REPORT_LENS) {
                     for (uint8_t n = 0; n + 1 < len; n += 2) {
                         uint8_t rid = _rxBuf[val + n];
                         uint8_t rlen = _rxBuf[val + n + 1];
@@ -744,26 +798,26 @@ void MassmoreBNO08x::parsePacket() {
         }
         break;
 
-    case MASSMORE_CH_EXECUTABLE:
-        if (_rxBuf[0] == MASSMORE_EXEC_RESET_COMPLETE) {
+    case MASSMORE_BNO08X_CH_EXECUTABLE:
+        if (_rxBuf[0] == MASSMORE_BNO08X_EXEC_RESET_COMPLETE) {
             _resetComplete = true;
-            dbgPrintf("[massmore] reset complete\n");
+            dbgPrintf(PSTR("[massmore] reset complete\n"));
         }
         break;
 
-    case MASSMORE_CH_CONTROL:
+    case MASSMORE_BNO08X_CH_CONTROL:
         parseControlReport();
         break;
 
-    case MASSMORE_CH_INPUT_REPORT:
+    case MASSMORE_BNO08X_CH_INPUT_REPORT:
         parseInputReports(false);
         break;
 
-    case MASSMORE_CH_WAKE_REPORT:
+    case MASSMORE_BNO08X_CH_WAKE_REPORT:
         parseInputReports(true);
         break;
 
-    case MASSMORE_CH_GYRO_RV:
+    case MASSMORE_BNO08X_CH_GYRO_RV:
         parseGyroRvPacket();
         break;
 
@@ -777,33 +831,33 @@ void MassmoreBNO08x::parsePacket() {
  * and no timestamp prefix: 4 quaternion words then 3 angular velocity words.
  * SH-2 Reference Manual [2] §6.5.44.
  */
-void MassmoreBNO08x::parseGyroRvPacket() {
+void Massmore_BNO08x::parseGyroRvPacket() {
     if (_rxLen < 14) return;
-    _quat.i        = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[0]),  MASSMORE_Q_QUAT);
-    _quat.j        = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[2]),  MASSMORE_Q_QUAT);
-    _quat.k        = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[4]),  MASSMORE_Q_QUAT);
-    _quat.real     = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[6]),  MASSMORE_Q_QUAT);
-    _angVel.x      = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[8]),  MASSMORE_Q_ANG_VEL);
-    _angVel.y      = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[10]), MASSMORE_Q_ANG_VEL);
-    _angVel.z      = MASSMORE_Q_TO_FLOAT(rds16(&_rxBuf[12]), MASSMORE_Q_ANG_VEL);
-    markNew(MASSMORE_SENSOR_GYRO_INTEGRATED_RV);
+    _quat.i        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[0]),  MASSMORE_BNO08X_Q_QUAT);
+    _quat.j        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[2]),  MASSMORE_BNO08X_Q_QUAT);
+    _quat.k        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[4]),  MASSMORE_BNO08X_Q_QUAT);
+    _quat.real     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[6]),  MASSMORE_BNO08X_Q_QUAT);
+    _angVel.x      = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[8]),  MASSMORE_BNO08X_Q_ANG_VEL);
+    _angVel.y      = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[10]), MASSMORE_BNO08X_Q_ANG_VEL);
+    _angVel.z      = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&_rxBuf[12]), MASSMORE_BNO08X_Q_ANG_VEL);
+    markNew(MASSMORE_BNO08X_SENSOR_GYRO_INTEGRATED_RV);
 }
 
-void MassmoreBNO08x::parseInputReports(bool wakeChannel) {
+void Massmore_BNO08x::parseInputReports(bool wakeChannel) {
     (void)wakeChannel;
     uint16_t off = 0;
 
     while (off < _rxLen) {
         uint8_t id = _rxBuf[off];
 
-        if (id == MASSMORE_REPORT_BASE_TIMESTAMP) {
+        if (id == MASSMORE_BNO08X_REPORT_BASE_TIMESTAMP) {
             /* Base delta, signed, in 100 us ticks — [1] Figure 1-35 */
             if (off + 5 > _rxLen) break;
             _timebaseDelta100us = (int32_t)rd32(&_rxBuf[off + 1]);
             off += 5;
             continue;
         }
-        if (id == MASSMORE_REPORT_TIMESTAMP_REBASE) {
+        if (id == MASSMORE_BNO08X_REPORT_TIMESTAMP_REBASE) {
             if (off + 5 > _rxLen) break;
             off += 5;
             continue;
@@ -822,12 +876,12 @@ void MassmoreBNO08x::parseInputReports(bool wakeChannel) {
  * status bits 1:0 are the accuracy, bits 7:2 the upper delay bits.
  * @return the number of bytes consumed, or 0 if the report is unknown.
  */
-uint16_t MassmoreBNO08x::parseOneSensorReport(uint16_t offset) {
+uint16_t Massmore_BNO08x::parseOneSensorReport(uint16_t offset) {
     uint8_t id = _rxBuf[offset];
     if (id >= 0x40) return 0;
 
     uint8_t len = _advertReportLen[id];
-    if (len == 0) len = kFallbackReportLen[id];
+    if (len == 0) len = pgm_read_byte(&kFallbackReportLen[id]);
     if (len == 0) return 0;                        /* unknown report: resync */
     if (offset + len > _rxLen) return 0;
 
@@ -850,89 +904,89 @@ uint16_t MassmoreBNO08x::parseOneSensorReport(uint16_t offset) {
     _timestampUs     = (ts < 0) ? 0 : (uint64_t)ts;
 
     switch (id) {
-    case MASSMORE_SENSOR_ACCELEROMETER:
-        _accel.x = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_ACCEL);
-        _accel.y = MASSMORE_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_Q_ACCEL);
-        _accel.z = MASSMORE_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_Q_ACCEL);
+    case MASSMORE_BNO08X_SENSOR_ACCELEROMETER:
+        _accel.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_ACCEL);
+        _accel.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_BNO08X_Q_ACCEL);
+        _accel.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_BNO08X_Q_ACCEL);
         break;
 
-    case MASSMORE_SENSOR_LINEAR_ACCELERATION:
-        _linAccel.x = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_ACCEL);
-        _linAccel.y = MASSMORE_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_Q_ACCEL);
-        _linAccel.z = MASSMORE_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_Q_ACCEL);
+    case MASSMORE_BNO08X_SENSOR_LINEAR_ACCELERATION:
+        _linAccel.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_ACCEL);
+        _linAccel.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_BNO08X_Q_ACCEL);
+        _linAccel.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_BNO08X_Q_ACCEL);
         break;
 
-    case MASSMORE_SENSOR_GRAVITY:
-        _gravity.x = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_ACCEL);
-        _gravity.y = MASSMORE_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_Q_ACCEL);
-        _gravity.z = MASSMORE_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_Q_ACCEL);
+    case MASSMORE_BNO08X_SENSOR_GRAVITY:
+        _gravity.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_ACCEL);
+        _gravity.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_BNO08X_Q_ACCEL);
+        _gravity.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_BNO08X_Q_ACCEL);
         break;
 
-    case MASSMORE_SENSOR_GYROSCOPE:
-        _gyro.x = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_GYRO);
-        _gyro.y = MASSMORE_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_Q_GYRO);
-        _gyro.z = MASSMORE_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_Q_GYRO);
+    case MASSMORE_BNO08X_SENSOR_GYROSCOPE:
+        _gyro.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_GYRO);
+        _gyro.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_BNO08X_Q_GYRO);
+        _gyro.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_BNO08X_Q_GYRO);
         break;
 
-    case MASSMORE_SENSOR_GYROSCOPE_UNCAL:
-        _gyro.x     = MASSMORE_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_Q_GYRO);
-        _gyro.y     = MASSMORE_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_Q_GYRO);
-        _gyro.z     = MASSMORE_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_Q_GYRO);
-        _gyroBias.x = MASSMORE_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_Q_GYRO);
-        _gyroBias.y = MASSMORE_Q_TO_FLOAT(rds16(&r[12]), MASSMORE_Q_GYRO);
-        _gyroBias.z = MASSMORE_Q_TO_FLOAT(rds16(&r[14]), MASSMORE_Q_GYRO);
+    case MASSMORE_BNO08X_SENSOR_GYROSCOPE_UNCAL:
+        _gyro.x     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_BNO08X_Q_GYRO);
+        _gyro.y     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_BNO08X_Q_GYRO);
+        _gyro.z     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_BNO08X_Q_GYRO);
+        _gyroBias.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_BNO08X_Q_GYRO);
+        _gyroBias.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[12]), MASSMORE_BNO08X_Q_GYRO);
+        _gyroBias.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[14]), MASSMORE_BNO08X_Q_GYRO);
         break;
 
-    case MASSMORE_SENSOR_MAGNETIC_FIELD:
-        _mag.x = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_MAG);
-        _mag.y = MASSMORE_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_Q_MAG);
-        _mag.z = MASSMORE_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_Q_MAG);
+    case MASSMORE_BNO08X_SENSOR_MAGNETIC_FIELD:
+        _mag.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_MAG);
+        _mag.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]), MASSMORE_BNO08X_Q_MAG);
+        _mag.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]), MASSMORE_BNO08X_Q_MAG);
         break;
 
-    case MASSMORE_SENSOR_MAGNETIC_FIELD_UNCAL:
-        _mag.x     = MASSMORE_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_Q_MAG);
-        _mag.y     = MASSMORE_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_Q_MAG);
-        _mag.z     = MASSMORE_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_Q_MAG);
-        _magBias.x = MASSMORE_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_Q_MAG);
-        _magBias.y = MASSMORE_Q_TO_FLOAT(rds16(&r[12]), MASSMORE_Q_MAG);
-        _magBias.z = MASSMORE_Q_TO_FLOAT(rds16(&r[14]), MASSMORE_Q_MAG);
+    case MASSMORE_BNO08X_SENSOR_MAGNETIC_FIELD_UNCAL:
+        _mag.x     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_BNO08X_Q_MAG);
+        _mag.y     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_BNO08X_Q_MAG);
+        _mag.z     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_BNO08X_Q_MAG);
+        _magBias.x = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_BNO08X_Q_MAG);
+        _magBias.y = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[12]), MASSMORE_BNO08X_Q_MAG);
+        _magBias.z = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[14]), MASSMORE_BNO08X_Q_MAG);
         break;
 
-    case MASSMORE_SENSOR_ROTATION_VECTOR:
-    case MASSMORE_SENSOR_GEOMAGNETIC_RV:
-    case MASSMORE_SENSOR_ARVR_STABILIZED_RV:
-        _quat.i        = MASSMORE_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_Q_QUAT);
-        _quat.j        = MASSMORE_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_Q_QUAT);
-        _quat.k        = MASSMORE_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_Q_QUAT);
-        _quat.real     = MASSMORE_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_Q_QUAT);
-        _quat.accuracy = MASSMORE_Q_TO_FLOAT(rds16(&r[12]), MASSMORE_Q_QUAT_ACC);
+    case MASSMORE_BNO08X_SENSOR_ROTATION_VECTOR:
+    case MASSMORE_BNO08X_SENSOR_GEOMAGNETIC_RV:
+    case MASSMORE_BNO08X_SENSOR_ARVR_STABILIZED_RV:
+        _quat.i        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.j        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.k        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.real     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_BNO08X_Q_QUAT);
+        _quat.accuracy = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[12]), MASSMORE_BNO08X_Q_QUAT_ACC);
         break;
 
-    case MASSMORE_SENSOR_GAME_ROTATION_VECTOR:
-    case MASSMORE_SENSOR_ARVR_STABILIZED_GRV:
-        _quat.i        = MASSMORE_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_Q_QUAT);
-        _quat.j        = MASSMORE_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_Q_QUAT);
-        _quat.k        = MASSMORE_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_Q_QUAT);
-        _quat.real     = MASSMORE_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_Q_QUAT);
+    case MASSMORE_BNO08X_SENSOR_GAME_ROTATION_VECTOR:
+    case MASSMORE_BNO08X_SENSOR_ARVR_STABILIZED_GRV:
+        _quat.i        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.j        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.k        = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.real     = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_BNO08X_Q_QUAT);
         _quat.accuracy = 0.0f;                 /* no accuracy field in this report */
         break;
 
-    case MASSMORE_SENSOR_GYRO_INTEGRATED_RV:
+    case MASSMORE_BNO08X_SENSOR_GYRO_INTEGRATED_RV:
         /* Also reachable if the device routes it to channel 3. */
-        _quat.i   = MASSMORE_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_Q_QUAT);
-        _quat.j   = MASSMORE_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_Q_QUAT);
-        _quat.k   = MASSMORE_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_Q_QUAT);
-        _quat.real= MASSMORE_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_Q_QUAT);
+        _quat.i   = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.j   = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[6]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.k   = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[8]),  MASSMORE_BNO08X_Q_QUAT);
+        _quat.real= MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[10]), MASSMORE_BNO08X_Q_QUAT);
         break;
 
-    case MASSMORE_SENSOR_RAW_ACCELEROMETER:
+    case MASSMORE_BNO08X_SENSOR_RAW_ACCELEROMETER:
         _rawAccel.x = rds16(&r[4]);
         _rawAccel.y = rds16(&r[6]);
         _rawAccel.z = rds16(&r[8]);
         _rawAccelTimestamp = rd32(&r[12]);
         break;
 
-    case MASSMORE_SENSOR_RAW_GYROSCOPE:
+    case MASSMORE_BNO08X_SENSOR_RAW_GYROSCOPE:
         _rawGyro.x   = rds16(&r[4]);
         _rawGyro.y   = rds16(&r[6]);
         _rawGyro.z   = rds16(&r[8]);
@@ -940,87 +994,87 @@ uint16_t MassmoreBNO08x::parseOneSensorReport(uint16_t offset) {
         _rawGyroTimestamp = rd32(&r[12]);
         break;
 
-    case MASSMORE_SENSOR_RAW_MAGNETOMETER:
+    case MASSMORE_BNO08X_SENSOR_RAW_MAGNETOMETER:
         _rawMag.x = rds16(&r[4]);
         _rawMag.y = rds16(&r[6]);
         _rawMag.z = rds16(&r[8]);
         _rawMagTimestamp = rd32(&r[12]);
         break;
 
-    case MASSMORE_SENSOR_PRESSURE:
-        _pressure = MASSMORE_Q_TO_FLOAT((int32_t)rd32(&r[4]), MASSMORE_Q_PRESSURE);
+    case MASSMORE_BNO08X_SENSOR_PRESSURE:
+        _pressure = MASSMORE_BNO08X_Q_TO_FLOAT((int32_t)rd32(&r[4]), MASSMORE_BNO08X_Q_PRESSURE);
         break;
-    case MASSMORE_SENSOR_AMBIENT_LIGHT:
-        _ambientLight = MASSMORE_Q_TO_FLOAT((int32_t)rd32(&r[4]), MASSMORE_Q_AMBIENT);
+    case MASSMORE_BNO08X_SENSOR_AMBIENT_LIGHT:
+        _ambientLight = MASSMORE_BNO08X_Q_TO_FLOAT((int32_t)rd32(&r[4]), MASSMORE_BNO08X_Q_AMBIENT);
         break;
-    case MASSMORE_SENSOR_HUMIDITY:
-        _humidity = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_HUMIDITY);
+    case MASSMORE_BNO08X_SENSOR_HUMIDITY:
+        _humidity = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_HUMIDITY);
         break;
-    case MASSMORE_SENSOR_PROXIMITY:
-        _proximity = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_PROXIMITY);
+    case MASSMORE_BNO08X_SENSOR_PROXIMITY:
+        _proximity = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_PROXIMITY);
         break;
-    case MASSMORE_SENSOR_TEMPERATURE:
-        _temperature = MASSMORE_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_Q_TEMPERATURE);
+    case MASSMORE_BNO08X_SENSOR_TEMPERATURE:
+        _temperature = MASSMORE_BNO08X_Q_TO_FLOAT(rds16(&r[4]), MASSMORE_BNO08X_Q_TEMPERATURE);
         break;
 
-    case MASSMORE_SENSOR_TAP_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_TAP_DETECTOR:
         _tapFlags = r[4];
         break;
 
-    case MASSMORE_SENSOR_STEP_COUNTER:
+    case MASSMORE_BNO08X_SENSOR_STEP_COUNTER:
         /* r[4..7] = latency, r[8..11] = cumulative step count */
         _stepCount = rd32(&r[8]);
         break;
 
-    case MASSMORE_SENSOR_STEP_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_STEP_DETECTOR:
         _stepDetected = true;
         break;
 
-    case MASSMORE_SENSOR_SIGNIFICANT_MOTION:
+    case MASSMORE_BNO08X_SENSOR_SIGNIFICANT_MOTION:
         _sigMotion = (rd16(&r[4]) != 0);
         break;
 
-    case MASSMORE_SENSOR_STABILITY_CLASSIFIER: {
-        massmore_stability_t s = (massmore_stability_t)r[4];
+    case MASSMORE_BNO08X_SENSOR_STABILITY_CLASSIFIER: {
+        Massmore_BNO08x_stability_t s = (Massmore_BNO08x_stability_t)r[4];
         if (s != _stability) _stabilityChanged = true;
         _stability = s;
         break;
     }
 
-    case MASSMORE_SENSOR_STABILITY_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_STABILITY_DETECTOR:
         _stabilityChanged = (rd16(&r[4]) != 0);
         break;
 
-    case MASSMORE_SENSOR_SHAKE_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_SHAKE_DETECTOR:
         _shakeFlags = rd16(&r[4]);
         break;
-    case MASSMORE_SENSOR_FLIP_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_FLIP_DETECTOR:
         _flip = (rd16(&r[4]) != 0);
         break;
-    case MASSMORE_SENSOR_PICKUP_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_PICKUP_DETECTOR:
         _pickup = (rd16(&r[4]) != 0);
         break;
-    case MASSMORE_SENSOR_TILT_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_TILT_DETECTOR:
         _tilt = (rd16(&r[4]) != 0);
         break;
-    case MASSMORE_SENSOR_POCKET_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_POCKET_DETECTOR:
         _pocket = (rd16(&r[4]) != 0);
         break;
-    case MASSMORE_SENSOR_CIRCLE_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_CIRCLE_DETECTOR:
         _circle = (rd16(&r[4]) != 0);
         break;
-    case MASSMORE_SENSOR_SLEEP_DETECTOR:
+    case MASSMORE_BNO08X_SENSOR_SLEEP_DETECTOR:
         _sleepState = r[4];
         break;
-    case MASSMORE_SENSOR_HEART_RATE_MONITOR:
+    case MASSMORE_BNO08X_SENSOR_HEART_RATE_MONITOR:
         _heartRate = rd16(&r[4]);
         break;
 
-    case MASSMORE_SENSOR_ACTIVITY_CLASSIFIER:
+    case MASSMORE_BNO08X_SENSOR_ACTIVITY_CLASSIFIER:
         /* r[4] bit 7 = last page, bits 6:0 = page number.
          * r[5] = most likely state, r[6..15] = confidence 0..100 per state. */
         _activityMostLikely = r[5];
-        for (uint8_t n = 0; n < MASSMORE_ACTIVITY_COUNT; n++) {
+        for (uint8_t n = 0; n < MASSMORE_BNO08X_ACTIVITY_COUNT; n++) {
             _activityConfidence[n] = r[6 + n];
         }
         break;
@@ -1034,18 +1088,18 @@ uint16_t MassmoreBNO08x::parseOneSensorReport(uint16_t offset) {
     return len;
 }
 
-void MassmoreBNO08x::parseControlReport() {
+void Massmore_BNO08x::parseControlReport() {
     switch (_rxBuf[0]) {
-    case MASSMORE_REPORT_PRODUCT_ID_RESP:
+    case MASSMORE_BNO08X_REPORT_PRODUCT_ID_RESP:
         parseProductIdResponse();
         break;
-    case MASSMORE_REPORT_COMMAND_RESPONSE:
+    case MASSMORE_BNO08X_REPORT_COMMAND_RESPONSE:
         parseCommandResponse();
         break;
-    case MASSMORE_REPORT_FRS_READ_RESPONSE:
+    case MASSMORE_BNO08X_REPORT_FRS_READ_RESPONSE:
         parseFrsReadResponse();
         break;
-    case MASSMORE_REPORT_FRS_WRITE_RESPONSE:
+    case MASSMORE_BNO08X_REPORT_FRS_WRITE_RESPONSE:
         /* FRS Write Response — [2] §6.3.4. _rxBuf[1] is the status:
          *   0  word received, send the next one
          *   3  write completed (success)
@@ -1068,7 +1122,7 @@ void MassmoreBNO08x::parseControlReport() {
             }
         }
         break;
-    case MASSMORE_REPORT_GET_FEATURE_RESP:
+    case MASSMORE_BNO08X_REPORT_GET_FEATURE_RESP:
         /* Same layout as Set Feature — [1] Figure 1-33. */
         if (_rxLen >= 9) {
             uint8_t sid = _rxBuf[1];
@@ -1081,10 +1135,10 @@ void MassmoreBNO08x::parseControlReport() {
     }
 }
 
-void MassmoreBNO08x::parseProductIdResponse() {
+void Massmore_BNO08x::parseProductIdResponse() {
     if (_rxLen < 14) return;
 
-    massmore_product_id_t p;
+    Massmore_BNO08x_product_id_t p;
     p.resetCause     = _rxBuf[1];
     p.swVersionMajor = _rxBuf[2];
     p.swVersionMinor = _rxBuf[3];
@@ -1117,7 +1171,7 @@ void MassmoreBNO08x::parseProductIdResponse() {
      * whichever response arrived first. */
     if (isApp || !_productId.valid) _productId = p;
 
-    dbgPrintf("[massmore] SW %u.%u.%u part %lu build %lu\n",
+    dbgPrintf(PSTR("[massmore] SW %u.%u.%u part %lu build %lu\n"),
               _productId.swVersionMajor, _productId.swVersionMinor,
               _productId.swVersionPatch,
               (unsigned long)_productId.swPartNumber,
@@ -1129,19 +1183,19 @@ void MassmoreBNO08x::parseProductIdResponse() {
  *   [0] 0xF1  [1] sequence  [2] command  [3] command sequence
  *   [4] response sequence   [5..15] R0..R10
  */
-void MassmoreBNO08x::parseCommandResponse() {
+void Massmore_BNO08x::parseCommandResponse() {
     if (_rxLen < 6) return;
     uint8_t command = _rxBuf[2];
 
     switch (command) {
-    case MASSMORE_CMD_ME_CALIBRATE:
+    case MASSMORE_BNO08X_CMD_ME_CALIBRATE:
         /* R0 = status, 0 on success — [5] */
         _calibrationStatus = _rxBuf[5];
         break;
-    case MASSMORE_CMD_OSCILLATOR:
+    case MASSMORE_BNO08X_CMD_OSCILLATOR:
         _oscillatorType = _rxBuf[5];
         break;
-    case MASSMORE_CMD_ERRORS:
+    case MASSMORE_BNO08X_CMD_ERRORS:
         _errorCount = _rxBuf[5];
         break;
     default:
@@ -1161,7 +1215,7 @@ void MassmoreBNO08x::parseCommandResponse() {
  *   3 read record completed            8 device error
  *   4 offset out of range
  */
-void MassmoreBNO08x::parseFrsReadResponse() {
+void Massmore_BNO08x::parseFrsReadResponse() {
     if (_rxLen < 14 || _frsTarget == nullptr) return;
 
     uint8_t  status     = _rxBuf[1] & 0x0F;
@@ -1192,19 +1246,19 @@ void MassmoreBNO08x::parseFrsReadResponse() {
 }
 
 /* ===========================================================================
- * SECTION 5 — Identity and authenticity
+ * SECTION 5 — Identity and authenticity (ตรวจของแท้)
  * ========================================================================= */
 
-massmore_status_t MassmoreBNO08x::requestProductID(uint32_t timeoutMs) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
+Massmore_BNO08x_status_t Massmore_BNO08x::requestProductID(uint32_t timeoutMs) {
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
 
     _productId.valid = false;
     _productIdCount  = 0;
     memset(_productIds, 0, sizeof(_productIds));
 
-    _txBuf[4] = MASSMORE_REPORT_PRODUCT_ID_REQ;
+    _txBuf[4] = MASSMORE_BNO08X_REPORT_PRODUCT_ID_REQ;
     _txBuf[5] = 0;                                  /* reserved — [1] Fig 1-28 */
-    if (!txPacket(MASSMORE_CH_CONTROL, 2)) return _lastError;
+    if (!txPacket(MASSMORE_BNO08X_CH_CONTROL, 2)) return _lastError;
 
     /* The part answers with one response per firmware image, back to back.
      * Returning on the first one is how you end up holding the bootloader's
@@ -1226,23 +1280,28 @@ massmore_status_t MassmoreBNO08x::requestProductID(uint32_t timeoutMs) {
         delayMicroseconds(200);
     }
 
-    return _productId.valid ? (_lastError = MASSMORE_OK)
-                            : (_lastError = MASSMORE_ERR_TIMEOUT);
+    return _productId.valid ? (_lastError = MASSMORE_BNO08X_OK)
+                            : (_lastError = MASSMORE_BNO08X_ERR_TIMEOUT);
 }
 
-massmore_auth_t MassmoreBNO08x::verifyChip() {
+Massmore_BNO08x_auth_t Massmore_BNO08x::verifyChip() {
+    _lastAuth = verifyChipInternal();
+    return _lastAuth;
+}
+
+Massmore_BNO08x_auth_t Massmore_BNO08x::verifyChipInternal() {
     if (!_productId.valid) {
-        if (requestProductID(300) != MASSMORE_OK) return MASSMORE_AUTH_NO_RESPONSE;
+        if (requestProductID(300) != MASSMORE_BNO08X_OK) return MASSMORE_BNO08X_AUTH_NO_RESPONSE;
     }
-    if (!_productId.valid) return MASSMORE_AUTH_NO_RESPONSE;
+    if (!_productId.valid) return MASSMORE_BNO08X_AUTH_NO_RESPONSE;
 
     /* A blank or non-BNO part that happens to ACK will not produce a coherent
      * version triple; real firmware is 1.x through 9.x with a non-zero build. */
     if (_productId.swVersionMajor == 0 || _productId.swVersionMajor > 9) {
-        return MASSMORE_AUTH_BAD_VERSION;
+        return MASSMORE_BNO08X_AUTH_BAD_VERSION;
     }
     if (_productId.swBuildNumber == 0 || _productId.swPartNumber == 0) {
-        return MASSMORE_AUTH_BAD_RESPONSE;
+        return MASSMORE_BNO08X_AUTH_BAD_RESPONSE;
     }
 
     /* Any one of the collected responses matching a known SH-2 application
@@ -1251,86 +1310,87 @@ massmore_auth_t MassmoreBNO08x::verifyChip() {
     for (uint8_t e = 0; e < _productIdCount; e++) {
         for (uint8_t i = 0; i < kKnownPartCount; i++) {
             if (_productIds[e].swPartNumber == kKnownPartNumbers[i]) {
-                return MASSMORE_AUTH_OK;
+                return MASSMORE_BNO08X_AUTH_OK;
             }
         }
     }
     for (uint8_t i = 0; i < kKnownPartCount; i++) {
         if (_productId.swPartNumber == kKnownPartNumbers[i]) {
-            return MASSMORE_AUTH_OK;
+            return MASSMORE_BNO08X_AUTH_OK;
         }
     }
-    return MASSMORE_AUTH_UNKNOWN_FW;
+    return MASSMORE_BNO08X_AUTH_UNKNOWN_FW;
 }
 
-const char *MassmoreBNO08x::authToString(massmore_auth_t a) {
+const char *Massmore_BNO08x::authToString(Massmore_BNO08x_auth_t a) {
     switch (a) {
-    case MASSMORE_AUTH_OK:           return "OK - genuine BNO08x factory firmware";
-    case MASSMORE_AUTH_UNKNOWN_FW:   return "Valid BNO08x, unrecognised firmware part number";
-    case MASSMORE_AUTH_BAD_VERSION:  return "Responded, but version fields are implausible";
-    case MASSMORE_AUTH_NO_RESPONSE:  return "No Product ID response - not a BNO08x or wiring/address wrong";
-    case MASSMORE_AUTH_BAD_RESPONSE: return "Malformed Product ID response";
+    case MASSMORE_BNO08X_AUTH_OK:           return MASSMORE_BNO08X_STR("OK - genuine BNO08x factory firmware");
+    case MASSMORE_BNO08X_AUTH_UNKNOWN_FW:   return MASSMORE_BNO08X_STR("Valid BNO08x, unrecognised firmware part number");
+    case MASSMORE_BNO08X_AUTH_BAD_VERSION:  return MASSMORE_BNO08X_STR("Responded, but version fields are implausible");
+    case MASSMORE_BNO08X_AUTH_NO_RESPONSE:  return MASSMORE_BNO08X_STR("No Product ID response - not a BNO08x or wiring/address wrong");
+    case MASSMORE_BNO08X_AUTH_BAD_RESPONSE: return MASSMORE_BNO08X_STR("Malformed Product ID response");
     }
-    return "Unknown";
+    return MASSMORE_BNO08X_STR("Unknown");
 }
 
-const char *MassmoreBNO08x::statusToString(massmore_status_t s) {
+const char *Massmore_BNO08x::statusToString(Massmore_BNO08x_status_t s) {
     switch (s) {
-    case MASSMORE_OK:               return "OK";
-    case MASSMORE_ERR_IO:           return "Bus I/O error";
-    case MASSMORE_ERR_TIMEOUT:      return "Timeout";
-    case MASSMORE_ERR_BAD_PARAM:    return "Bad parameter";
-    case MASSMORE_ERR_NO_DEVICE:    return "No device found";
-    case MASSMORE_ERR_BAD_RESPONSE: return "Bad response";
-    case MASSMORE_ERR_NOT_READY:    return "Not initialised - call begin() first";
-    case MASSMORE_ERR_UNSUPPORTED:  return "Unsupported on this transport";
+    case MASSMORE_BNO08X_OK:               return MASSMORE_BNO08X_STR("OK");
+    case MASSMORE_BNO08X_ERR_IO:           return MASSMORE_BNO08X_STR("Bus I/O error");
+    case MASSMORE_BNO08X_ERR_TIMEOUT:      return MASSMORE_BNO08X_STR("Timeout");
+    case MASSMORE_BNO08X_ERR_BAD_PARAM:    return MASSMORE_BNO08X_STR("Bad parameter");
+    case MASSMORE_BNO08X_ERR_NO_DEVICE:    return MASSMORE_BNO08X_STR("No device found");
+    case MASSMORE_BNO08X_ERR_BAD_RESPONSE: return MASSMORE_BNO08X_STR("Bad response");
+    case MASSMORE_BNO08X_ERR_NOT_READY:    return MASSMORE_BNO08X_STR("Not initialised - call begin() first");
+    case MASSMORE_BNO08X_ERR_UNSUPPORTED:  return MASSMORE_BNO08X_STR("Unsupported on this transport");
+    case MASSMORE_BNO08X_ERR_WRONG_ID:     return MASSMORE_BNO08X_STR("Product ID does not match a BNO08x");
     }
-    return "Unknown";
+    return MASSMORE_BNO08X_STR("Unknown");
 }
 
-const char *MassmoreBNO08x::getResetReasonString() const {
+const char *Massmore_BNO08x::getResetReasonString() const {
     /* Reset cause codes — [2] §6.3.2 */
     switch (_productId.resetCause) {
-    case 0: return "Not applicable";
-    case 1: return "Power on reset";
-    case 2: return "Internal system reset";
-    case 3: return "Watchdog timeout";
-    case 4: return "External reset (NRST)";
-    case 5: return "Other";
+    case 0: return MASSMORE_BNO08X_STR("Not applicable");
+    case 1: return MASSMORE_BNO08X_STR("Power on reset");
+    case 2: return MASSMORE_BNO08X_STR("Internal system reset");
+    case 3: return MASSMORE_BNO08X_STR("Watchdog timeout");
+    case 4: return MASSMORE_BNO08X_STR("External reset (NRST)");
+    case 5: return MASSMORE_BNO08X_STR("Other");
     }
-    return "Unknown";
+    return MASSMORE_BNO08X_STR("Unknown");
 }
 
-massmore_status_t MassmoreBNO08x::readSerialNumber(uint64_t &serialOut,
+Massmore_BNO08x_status_t Massmore_BNO08x::readSerialNumber(uint64_t &serialOut,
                                                    uint32_t timeoutMs) {
     uint32_t words[4] = {0, 0, 0, 0};
     uint16_t read = 0;
-    massmore_status_t rc = readFrsRecord(MASSMORE_FRS_SERIAL_NUMBER, words,
+    Massmore_BNO08x_status_t rc = readFrsRecord(MASSMORE_BNO08X_FRS_SERIAL_NUMBER, words,
                                          4, read, timeoutMs);
-    if (rc != MASSMORE_OK || read == 0) return rc == MASSMORE_OK
-                                              ? (_lastError = MASSMORE_ERR_BAD_RESPONSE)
+    if (rc != MASSMORE_BNO08X_OK || read == 0) return rc == MASSMORE_BNO08X_OK
+                                              ? (_lastError = MASSMORE_BNO08X_ERR_BAD_RESPONSE)
                                               : rc;
     serialOut = (read >= 2)
         ? (((uint64_t)words[1] << 32) | words[0])
         : (uint64_t)words[0];
-    return (_lastError = MASSMORE_OK);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
 /* ===========================================================================
- * SECTION 6 — Enabling sensors
+ * SECTION 6 — Enabling sensors (Set Feature)
  * ========================================================================= */
 
-massmore_status_t MassmoreBNO08x::setFeature(uint8_t sensorId,
+Massmore_BNO08x_status_t Massmore_BNO08x::setFeature(uint8_t sensorId,
                                              uint32_t reportIntervalUs,
                                              uint32_t batchIntervalUs,
                                              uint8_t flags,
                                              uint16_t changeSensitivity,
                                              uint32_t sensorSpecific) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
 
     /* Set Feature Command — [1] Figure 1-33, 17 bytes. */
     uint8_t *p = &_txBuf[4];
-    p[0]  = MASSMORE_REPORT_SET_FEATURE_CMD;
+    p[0]  = MASSMORE_BNO08X_REPORT_SET_FEATURE_CMD;
     p[1]  = sensorId;
     p[2]  = flags;
     p[3]  = (uint8_t)(changeSensitivity & 0xFF);
@@ -1348,21 +1408,21 @@ massmore_status_t MassmoreBNO08x::setFeature(uint8_t sensorId,
     p[15] = (uint8_t)((sensorSpecific >> 16) & 0xFF);
     p[16] = (uint8_t)((sensorSpecific >> 24) & 0xFF);
 
-    if (!txPacket(MASSMORE_CH_CONTROL, 17)) return _lastError;
+    if (!txPacket(MASSMORE_BNO08X_CH_CONTROL, 17)) return _lastError;
 
     if (sensorId < 0x40) _intervals[sensorId] = reportIntervalUs;
-    return (_lastError = MASSMORE_OK);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
-massmore_status_t MassmoreBNO08x::enableReport(uint8_t sensorId, uint32_t us) {
+Massmore_BNO08x_status_t Massmore_BNO08x::enableReport(uint8_t sensorId, uint32_t us) {
     return setFeature(sensorId, us);
 }
 
-massmore_status_t MassmoreBNO08x::disableReport(uint8_t sensorId) {
+Massmore_BNO08x_status_t Massmore_BNO08x::disableReport(uint8_t sensorId) {
     return setFeature(sensorId, 0);
 }
 
-void MassmoreBNO08x::disableAllReports() {
+void Massmore_BNO08x::disableAllReports() {
     for (uint8_t id = 1; id < 0x40; id++) {
         if (_intervals[id] != 0) {
             setFeature(id, 0);
@@ -1371,115 +1431,115 @@ void MassmoreBNO08x::disableAllReports() {
     }
 }
 
-massmore_status_t MassmoreBNO08x::requestFeature(uint8_t sensorId) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
+Massmore_BNO08x_status_t Massmore_BNO08x::requestFeature(uint8_t sensorId) {
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
     _getFeatureResponse = false;
-    _txBuf[4] = MASSMORE_REPORT_GET_FEATURE_REQ;
+    _txBuf[4] = MASSMORE_BNO08X_REPORT_GET_FEATURE_REQ;
     _txBuf[5] = sensorId;
-    if (!txPacket(MASSMORE_CH_CONTROL, 2)) return _lastError;
+    if (!txPacket(MASSMORE_BNO08X_CH_CONTROL, 2)) return _lastError;
 
     uint32_t start = millis();
     while ((millis() - start) < 200) {
-        if (update() && _getFeatureResponse) return (_lastError = MASSMORE_OK);
+        if (update() && _getFeatureResponse) return (_lastError = MASSMORE_BNO08X_OK);
         delayMicroseconds(200);
     }
-    return (_lastError = MASSMORE_ERR_TIMEOUT);
+    return (_lastError = MASSMORE_BNO08X_ERR_TIMEOUT);
 }
 
-uint32_t MassmoreBNO08x::getReportInterval(uint8_t sensorId) const {
+uint32_t Massmore_BNO08x::getReportInterval(uint8_t sensorId) const {
     return (sensorId < 0x40) ? _intervals[sensorId] : 0;
 }
 
 /* --- convenience wrappers ------------------------------------------------ */
-massmore_status_t MassmoreBNO08x::enableAccelerometer(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_ACCELEROMETER, us); }
-massmore_status_t MassmoreBNO08x::enableGyroscope(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_GYROSCOPE, us); }
-massmore_status_t MassmoreBNO08x::enableMagnetometer(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_MAGNETIC_FIELD, us); }
-massmore_status_t MassmoreBNO08x::enableLinearAcceleration(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_LINEAR_ACCELERATION, us); }
-massmore_status_t MassmoreBNO08x::enableGravity(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_GRAVITY, us); }
-massmore_status_t MassmoreBNO08x::enableGyroscopeUncalibrated(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_GYROSCOPE_UNCAL, us); }
-massmore_status_t MassmoreBNO08x::enableMagnetometerUncalibrated(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_MAGNETIC_FIELD_UNCAL, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableAccelerometer(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_ACCELEROMETER, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableGyroscope(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_GYROSCOPE, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableMagnetometer(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_MAGNETIC_FIELD, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableLinearAcceleration(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_LINEAR_ACCELERATION, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableGravity(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_GRAVITY, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableGyroscopeUncalibrated(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_GYROSCOPE_UNCAL, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableMagnetometerUncalibrated(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_MAGNETIC_FIELD_UNCAL, us); }
 
-massmore_status_t MassmoreBNO08x::enableRotationVector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_ROTATION_VECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableGameRotationVector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_GAME_ROTATION_VECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableGeomagneticRotationVector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_GEOMAGNETIC_RV, us); }
-massmore_status_t MassmoreBNO08x::enableARVRStabilizedRotationVector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_ARVR_STABILIZED_RV, us); }
-massmore_status_t MassmoreBNO08x::enableARVRStabilizedGameRotationVector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_ARVR_STABILIZED_GRV, us); }
-massmore_status_t MassmoreBNO08x::enableGyroIntegratedRotationVector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_GYRO_INTEGRATED_RV, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableRotationVector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_ROTATION_VECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableGameRotationVector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_GAME_ROTATION_VECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableGeomagneticRotationVector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_GEOMAGNETIC_RV, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableARVRStabilizedRotationVector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_ARVR_STABILIZED_RV, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableARVRStabilizedGameRotationVector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_ARVR_STABILIZED_GRV, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableGyroIntegratedRotationVector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_GYRO_INTEGRATED_RV, us); }
 
-massmore_status_t MassmoreBNO08x::enableRawAccelerometer(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_RAW_ACCELEROMETER, us); }
-massmore_status_t MassmoreBNO08x::enableRawGyroscope(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_RAW_GYROSCOPE, us); }
-massmore_status_t MassmoreBNO08x::enableRawMagnetometer(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_RAW_MAGNETOMETER, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableRawAccelerometer(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_RAW_ACCELEROMETER, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableRawGyroscope(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_RAW_GYROSCOPE, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableRawMagnetometer(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_RAW_MAGNETOMETER, us); }
 
-massmore_status_t MassmoreBNO08x::enableTapDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_TAP_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableStepCounter(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_STEP_COUNTER, us); }
-massmore_status_t MassmoreBNO08x::enableStepDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_STEP_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableSignificantMotion(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_SIGNIFICANT_MOTION, us); }
-massmore_status_t MassmoreBNO08x::enableStabilityClassifier(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_STABILITY_CLASSIFIER, us); }
-massmore_status_t MassmoreBNO08x::enableStabilityDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_STABILITY_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableShakeDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_SHAKE_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableFlipDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_FLIP_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enablePickupDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_PICKUP_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableSleepDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_SLEEP_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableTiltDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_TILT_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enablePocketDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_POCKET_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableCircleDetector(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_CIRCLE_DETECTOR, us); }
-massmore_status_t MassmoreBNO08x::enableHeartRateMonitor(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_HEART_RATE_MONITOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableTapDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_TAP_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableStepCounter(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_STEP_COUNTER, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableStepDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_STEP_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableSignificantMotion(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_SIGNIFICANT_MOTION, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableStabilityClassifier(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_STABILITY_CLASSIFIER, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableStabilityDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_STABILITY_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableShakeDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_SHAKE_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableFlipDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_FLIP_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enablePickupDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_PICKUP_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableSleepDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_SLEEP_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableTiltDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_TILT_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enablePocketDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_POCKET_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableCircleDetector(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_CIRCLE_DETECTOR, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableHeartRateMonitor(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_HEART_RATE_MONITOR, us); }
 
-massmore_status_t MassmoreBNO08x::enableActivityClassifier(uint32_t us,
+Massmore_BNO08x_status_t Massmore_BNO08x::enableActivityClassifier(uint32_t us,
                                                            uint32_t enabledActivities) {
     /* The activity bitmap rides in the sensor specific configuration word —
      * [2] §6.5.36. */
-    return setFeature(MASSMORE_SENSOR_ACTIVITY_CLASSIFIER, us, 0,
-                      MASSMORE_FEATURE_FLAG_NONE, 0, enabledActivities);
+    return setFeature(MASSMORE_BNO08X_SENSOR_ACTIVITY_CLASSIFIER, us, 0,
+                      MASSMORE_BNO08X_FEATURE_FLAG_NONE, 0, enabledActivities);
 }
 
-massmore_status_t MassmoreBNO08x::enablePressure(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_PRESSURE, us); }
-massmore_status_t MassmoreBNO08x::enableAmbientLight(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_AMBIENT_LIGHT, us); }
-massmore_status_t MassmoreBNO08x::enableHumidity(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_HUMIDITY, us); }
-massmore_status_t MassmoreBNO08x::enableProximity(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_PROXIMITY, us); }
-massmore_status_t MassmoreBNO08x::enableTemperature(uint32_t us)
-    { return setFeature(MASSMORE_SENSOR_TEMPERATURE, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enablePressure(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_PRESSURE, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableAmbientLight(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_AMBIENT_LIGHT, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableHumidity(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_HUMIDITY, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableProximity(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_PROXIMITY, us); }
+Massmore_BNO08x_status_t Massmore_BNO08x::enableTemperature(uint32_t us)
+    { return setFeature(MASSMORE_BNO08X_SENSOR_TEMPERATURE, us); }
 
 /* ===========================================================================
- * SECTION 7 — Data accessors and maths
+ * SECTION 7 — Data accessors and maths (quaternion → Euler)
  * ========================================================================= */
 
-massmore_euler_t MassmoreBNO08x::quaternionToEuler(const massmore_quat_t &q) {
-    massmore_euler_t e;
+Massmore_BNO08x_euler_t Massmore_BNO08x::quaternionToEuler(const Massmore_BNO08x_quat_t &q) {
+    Massmore_BNO08x_euler_t e;
     const float w = q.real, x = q.i, y = q.j, z = q.k;
 
     /* Standard ZYX (yaw-pitch-roll) extraction. */
@@ -1500,124 +1560,124 @@ massmore_euler_t MassmoreBNO08x::quaternionToEuler(const massmore_quat_t &q) {
     return e;
 }
 
-massmore_euler_t MassmoreBNO08x::getEuler() { return quaternionToEuler(_quat); }
+Massmore_BNO08x_euler_t Massmore_BNO08x::getEuler() { return quaternionToEuler(_quat); }
 
-massmore_euler_t MassmoreBNO08x::getEulerDeg() {
-    massmore_euler_t e = quaternionToEuler(_quat);
+Massmore_BNO08x_euler_t Massmore_BNO08x::getEulerDeg() {
+    Massmore_BNO08x_euler_t e = quaternionToEuler(_quat);
     e.roll  *= 57.2957795131f;
     e.pitch *= 57.2957795131f;
     e.yaw   *= 57.2957795131f;
     return e;
 }
 
-float MassmoreBNO08x::getRoll()  { return quaternionToEuler(_quat).roll; }
-float MassmoreBNO08x::getPitch() { return quaternionToEuler(_quat).pitch; }
-float MassmoreBNO08x::getYaw()   { return quaternionToEuler(_quat).yaw; }
-float MassmoreBNO08x::getRollDeg()  { return getRoll()  * 57.2957795131f; }
-float MassmoreBNO08x::getPitchDeg() { return getPitch() * 57.2957795131f; }
-float MassmoreBNO08x::getYawDeg()   { return getYaw()   * 57.2957795131f; }
+float Massmore_BNO08x::getRoll()  { return quaternionToEuler(_quat).roll; }
+float Massmore_BNO08x::getPitch() { return quaternionToEuler(_quat).pitch; }
+float Massmore_BNO08x::getYaw()   { return quaternionToEuler(_quat).yaw; }
+float Massmore_BNO08x::getRollDeg()  { return getRoll()  * 57.2957795131f; }
+float Massmore_BNO08x::getPitchDeg() { return getPitch() * 57.2957795131f; }
+float Massmore_BNO08x::getYawDeg()   { return getYaw()   * 57.2957795131f; }
 
-float MassmoreBNO08x::getHeadingDeg() {
+float Massmore_BNO08x::getHeadingDeg() {
     float h = getYawDeg();
     if (h < 0.0f) h += 360.0f;
     return h;
 }
 
-massmore_vec3_t MassmoreBNO08x::getGyroDeg() const {
-    massmore_vec3_t v;
+Massmore_BNO08x_vec3_t Massmore_BNO08x::getGyroDeg() const {
+    Massmore_BNO08x_vec3_t v;
     v.x = _gyro.x * 57.2957795131f;
     v.y = _gyro.y * 57.2957795131f;
     v.z = _gyro.z * 57.2957795131f;
     return v;
 }
 
-uint8_t MassmoreBNO08x::getTapDetector() {
+uint8_t Massmore_BNO08x::getTapDetector() {
     uint8_t f = _tapFlags;
     _tapFlags = 0;
     return f;
 }
 
-uint16_t MassmoreBNO08x::getShakeDetector() {
+uint16_t Massmore_BNO08x::getShakeDetector() {
     uint16_t f = _shakeFlags;
     _shakeFlags = 0;
     return f;
 }
 
-bool MassmoreBNO08x::getSignificantMotion() { bool v = _sigMotion; _sigMotion = false; return v; }
-bool MassmoreBNO08x::getFlipDetected()      { bool v = _flip;      _flip = false;      return v; }
-bool MassmoreBNO08x::getPickupDetected()    { bool v = _pickup;    _pickup = false;    return v; }
-bool MassmoreBNO08x::getTiltDetected()      { bool v = _tilt;      _tilt = false;      return v; }
-bool MassmoreBNO08x::getPocketDetected()    { bool v = _pocket;    _pocket = false;    return v; }
-bool MassmoreBNO08x::getCircleDetected()    { bool v = _circle;    _circle = false;    return v; }
-bool MassmoreBNO08x::getStepDetected()      { bool v = _stepDetected; _stepDetected = false; return v; }
-bool MassmoreBNO08x::getStabilityChanged()  { bool v = _stabilityChanged; _stabilityChanged = false; return v; }
+bool Massmore_BNO08x::getSignificantMotion() { bool v = _sigMotion; _sigMotion = false; return v; }
+bool Massmore_BNO08x::getFlipDetected()      { bool v = _flip;      _flip = false;      return v; }
+bool Massmore_BNO08x::getPickupDetected()    { bool v = _pickup;    _pickup = false;    return v; }
+bool Massmore_BNO08x::getTiltDetected()      { bool v = _tilt;      _tilt = false;      return v; }
+bool Massmore_BNO08x::getPocketDetected()    { bool v = _pocket;    _pocket = false;    return v; }
+bool Massmore_BNO08x::getCircleDetected()    { bool v = _circle;    _circle = false;    return v; }
+bool Massmore_BNO08x::getStepDetected()      { bool v = _stepDetected; _stepDetected = false; return v; }
+bool Massmore_BNO08x::getStabilityChanged()  { bool v = _stabilityChanged; _stabilityChanged = false; return v; }
 
-const char *MassmoreBNO08x::getStabilityString() const {
+const char *Massmore_BNO08x::getStabilityString() const {
     switch (_stability) {
-    case MASSMORE_STABILITY_UNKNOWN:    return "Unknown";
-    case MASSMORE_STABILITY_ON_TABLE:   return "On table";
-    case MASSMORE_STABILITY_STATIONARY: return "Stationary";
-    case MASSMORE_STABILITY_STABLE:     return "Stable";
-    case MASSMORE_STABILITY_MOTION:     return "In motion";
-    default:                            return "Reserved";
+    case MASSMORE_BNO08X_STABILITY_UNKNOWN:    return MASSMORE_BNO08X_STR("Unknown");
+    case MASSMORE_BNO08X_STABILITY_ON_TABLE:   return MASSMORE_BNO08X_STR("On table");
+    case MASSMORE_BNO08X_STABILITY_STATIONARY: return MASSMORE_BNO08X_STR("Stationary");
+    case MASSMORE_BNO08X_STABILITY_STABLE:     return MASSMORE_BNO08X_STR("Stable");
+    case MASSMORE_BNO08X_STABILITY_MOTION:     return MASSMORE_BNO08X_STR("In motion");
+    default:                            return MASSMORE_BNO08X_STR("Reserved");
     }
 }
 
-const char *MassmoreBNO08x::getActivityString() const {
+const char *Massmore_BNO08x::getActivityString() const {
     switch (_activityMostLikely) {
-    case MASSMORE_ACTIVITY_UNKNOWN:    return "Unknown";
-    case MASSMORE_ACTIVITY_IN_VEHICLE: return "In vehicle";
-    case MASSMORE_ACTIVITY_ON_BICYCLE: return "On bicycle";
-    case MASSMORE_ACTIVITY_ON_FOOT:    return "On foot";
-    case MASSMORE_ACTIVITY_STILL:      return "Still";
-    case MASSMORE_ACTIVITY_TILTING:    return "Tilting";
-    case MASSMORE_ACTIVITY_WALKING:    return "Walking";
-    case MASSMORE_ACTIVITY_RUNNING:    return "Running";
-    case MASSMORE_ACTIVITY_ON_STAIRS:  return "On stairs";
-    default:                           return "Unknown";
+    case MASSMORE_BNO08X_ACTIVITY_UNKNOWN:    return MASSMORE_BNO08X_STR("Unknown");
+    case MASSMORE_BNO08X_ACTIVITY_IN_VEHICLE: return MASSMORE_BNO08X_STR("In vehicle");
+    case MASSMORE_BNO08X_ACTIVITY_ON_BICYCLE: return MASSMORE_BNO08X_STR("On bicycle");
+    case MASSMORE_BNO08X_ACTIVITY_ON_FOOT:    return MASSMORE_BNO08X_STR("On foot");
+    case MASSMORE_BNO08X_ACTIVITY_STILL:      return MASSMORE_BNO08X_STR("Still");
+    case MASSMORE_BNO08X_ACTIVITY_TILTING:    return MASSMORE_BNO08X_STR("Tilting");
+    case MASSMORE_BNO08X_ACTIVITY_WALKING:    return MASSMORE_BNO08X_STR("Walking");
+    case MASSMORE_BNO08X_ACTIVITY_RUNNING:    return MASSMORE_BNO08X_STR("Running");
+    case MASSMORE_BNO08X_ACTIVITY_ON_STAIRS:  return MASSMORE_BNO08X_STR("On stairs");
+    default:                           return MASSMORE_BNO08X_STR("Unknown");
     }
 }
 
-uint8_t MassmoreBNO08x::getActivityConfidence(massmore_activity_t a) const {
-    if ((uint8_t)a >= MASSMORE_ACTIVITY_COUNT) return 0;
+uint8_t Massmore_BNO08x::getActivityConfidence(Massmore_BNO08x_activity_t a) const {
+    if ((uint8_t)a >= MASSMORE_BNO08X_ACTIVITY_COUNT) return 0;
     return _activityConfidence[(uint8_t)a];
 }
 
-const char *MassmoreBNO08x::accuracyToString(massmore_accuracy_t a) {
+const char *Massmore_BNO08x::accuracyToString(Massmore_BNO08x_accuracy_t a) {
     switch (a) {
-    case MASSMORE_ACCURACY_UNRELIABLE: return "Unreliable";
-    case MASSMORE_ACCURACY_LOW:        return "Low";
-    case MASSMORE_ACCURACY_MEDIUM:     return "Medium";
-    case MASSMORE_ACCURACY_HIGH:       return "High";
+    case MASSMORE_BNO08X_ACCURACY_UNRELIABLE: return MASSMORE_BNO08X_STR("Unreliable");
+    case MASSMORE_BNO08X_ACCURACY_LOW:        return MASSMORE_BNO08X_STR("Low");
+    case MASSMORE_BNO08X_ACCURACY_MEDIUM:     return MASSMORE_BNO08X_STR("Medium");
+    case MASSMORE_BNO08X_ACCURACY_HIGH:       return MASSMORE_BNO08X_STR("High");
     }
-    return "Unknown";
+    return MASSMORE_BNO08X_STR("Unknown");
 }
 
 /* ===========================================================================
- * SECTION 8 — Commands (0xF2)
+ * SECTION 8 — Commands 0xF2 (calibration / tare / reset / sleep)
  * ========================================================================= */
 
 /*
  * Command Request — [2] §6.3.8:
  *   [0] 0xF2  [1] sequence number  [2] command  [3..11] P0..P8
  */
-massmore_status_t MassmoreBNO08x::sendCommand(uint8_t command,
+Massmore_BNO08x_status_t Massmore_BNO08x::sendCommand(uint8_t command,
                                               const uint8_t *p, uint8_t pLen) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
-    if (pLen > 9) return (_lastError = MASSMORE_ERR_BAD_PARAM);
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
+    if (pLen > 9) return (_lastError = MASSMORE_BNO08X_ERR_BAD_PARAM);
 
     uint8_t *d = &_txBuf[4];
     memset(d, 0, 12);
-    d[0] = MASSMORE_REPORT_COMMAND_REQUEST;
+    d[0] = MASSMORE_BNO08X_REPORT_COMMAND_REQUEST;
     d[1] = _cmdSeqNum++;
     d[2] = command;
     if (p && pLen) memcpy(&d[3], p, pLen);
 
-    return txPacket(MASSMORE_CH_CONTROL, 12) ? (_lastError = MASSMORE_OK) : _lastError;
+    return txPacket(MASSMORE_BNO08X_CH_CONTROL, 12) ? (_lastError = MASSMORE_BNO08X_OK) : _lastError;
 }
 
 /* --- calibration --------------------------------------------------------- */
-massmore_status_t MassmoreBNO08x::calibrate(massmore_calibrate_target_t target) {
+Massmore_BNO08x_status_t Massmore_BNO08x::calibrate(Massmore_BNO08x_calibrate_target_t target) {
     /* ME Calibration command — [5].
      * Motions the device expects, datasheet [1] Figure 3-2 — NOT a figure of
      * eight, that is BNO055 folklore:
@@ -1632,85 +1692,85 @@ massmore_status_t MassmoreBNO08x::calibrate(massmore_calibrate_target_t target) 
      * P4 planar accel enable. */
     uint8_t p[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
     switch (target) {
-    case MASSMORE_CAL_ACCEL:          p[0] = 1; break;
-    case MASSMORE_CAL_GYRO:           p[1] = 1; break;
-    case MASSMORE_CAL_MAG:            p[2] = 1; break;
-    case MASSMORE_CAL_PLANAR_ACCEL:   p[4] = 1; break;
-    case MASSMORE_CAL_ACCEL_GYRO_MAG: p[0] = p[1] = p[2] = 1; break;
-    case MASSMORE_CAL_STOP:           break;    /* all zero = disable */
-    default: return (_lastError = MASSMORE_ERR_BAD_PARAM);
+    case MASSMORE_BNO08X_CAL_ACCEL:          p[0] = 1; break;
+    case MASSMORE_BNO08X_CAL_GYRO:           p[1] = 1; break;
+    case MASSMORE_BNO08X_CAL_MAG:            p[2] = 1; break;
+    case MASSMORE_BNO08X_CAL_PLANAR_ACCEL:   p[4] = 1; break;
+    case MASSMORE_BNO08X_CAL_ACCEL_GYRO_MAG: p[0] = p[1] = p[2] = 1; break;
+    case MASSMORE_BNO08X_CAL_STOP:           break;    /* all zero = disable */
+    default: return (_lastError = MASSMORE_BNO08X_ERR_BAD_PARAM);
     }
     _calibrationStatus = 1;                     /* until the device confirms */
-    return sendCommand(MASSMORE_CMD_ME_CALIBRATE, p, 9);
+    return sendCommand(MASSMORE_BNO08X_CMD_ME_CALIBRATE, p, 9);
 }
 
-massmore_status_t MassmoreBNO08x::requestCalibrationStatus() {
+Massmore_BNO08x_status_t Massmore_BNO08x::requestCalibrationStatus() {
     uint8_t p[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
     p[3] = 0x01;                                /* subcommand: get ME calibration */
-    return sendCommand(MASSMORE_CMD_ME_CALIBRATE, p, 9);
+    return sendCommand(MASSMORE_BNO08X_CMD_ME_CALIBRATE, p, 9);
 }
 
-massmore_status_t MassmoreBNO08x::saveCalibration() {
-    return sendCommand(MASSMORE_CMD_SAVE_DCD, nullptr, 0);
+Massmore_BNO08x_status_t Massmore_BNO08x::saveCalibration() {
+    return sendCommand(MASSMORE_BNO08X_CMD_SAVE_DCD, nullptr, 0);
 }
 
-massmore_status_t MassmoreBNO08x::setPeriodicCalibrationSave(bool enable) {
+Massmore_BNO08x_status_t Massmore_BNO08x::setPeriodicCalibrationSave(bool enable) {
     uint8_t p[9] = {0};
     p[0] = enable ? 0 : 1;                      /* P0: 0 = enable, 1 = disable */
-    return sendCommand(MASSMORE_CMD_DCD_PERIOD_SAVE, p, 9);
+    return sendCommand(MASSMORE_BNO08X_CMD_DCD_PERIOD_SAVE, p, 9);
 }
 
-massmore_status_t MassmoreBNO08x::clearCalibrationAndReset() {
-    massmore_status_t rc = sendCommand(MASSMORE_CMD_CLEAR_DCD, nullptr, 0);
-    if (rc != MASSMORE_OK) return rc;
+Massmore_BNO08x_status_t Massmore_BNO08x::clearCalibrationAndReset() {
+    Massmore_BNO08x_status_t rc = sendCommand(MASSMORE_BNO08X_CMD_CLEAR_DCD, nullptr, 0);
+    if (rc != MASSMORE_BNO08X_OK) return rc;
     delay(200);                                 /* the device reboots itself */
     applyResetSettleDelay();
     updateAll(16);
-    return MASSMORE_OK;
+    return MASSMORE_BNO08X_OK;
 }
 
 /* --- tare ---------------------------------------------------------------- */
-massmore_status_t MassmoreBNO08x::tareNow(uint8_t axes, massmore_tare_basis_t basis) {
-    if ((axes & MASSMORE_TARE_AXIS_ALL) == 0) return (_lastError = MASSMORE_ERR_BAD_PARAM);
+Massmore_BNO08x_status_t Massmore_BNO08x::tareNow(uint8_t axes, Massmore_BNO08x_tare_basis_t basis) {
+    if ((axes & MASSMORE_BNO08X_TARE_AXIS_ALL) == 0) return (_lastError = MASSMORE_BNO08X_ERR_BAD_PARAM);
     uint8_t p[9] = {0};
-    p[0] = MASSMORE_TARE_NOW;                   /* P0 subcommand */
+    p[0] = MASSMORE_BNO08X_TARE_NOW;                   /* P0 subcommand */
     p[1] = (uint8_t)(axes & 0x07);              /* P1 axis bitmap */
     p[2] = (uint8_t)basis;                      /* P2 rotation vector basis */
-    return sendCommand(MASSMORE_CMD_TARE, p, 9);
+    return sendCommand(MASSMORE_BNO08X_CMD_TARE, p, 9);
 }
 
-massmore_status_t MassmoreBNO08x::persistTare() {
+Massmore_BNO08x_status_t Massmore_BNO08x::persistTare() {
     uint8_t p[9] = {0};
-    p[0] = MASSMORE_TARE_PERSIST;
-    return sendCommand(MASSMORE_CMD_TARE, p, 9);
+    p[0] = MASSMORE_BNO08X_TARE_PERSIST;
+    return sendCommand(MASSMORE_BNO08X_CMD_TARE, p, 9);
 }
 
-massmore_status_t MassmoreBNO08x::clearTare() {
+Massmore_BNO08x_status_t Massmore_BNO08x::clearTare() {
     /* Set Reorientation with an identity quaternion clears the stored tare. */
     uint8_t p[9] = {0};
-    p[0] = MASSMORE_TARE_SET_REORIENTATION;
+    p[0] = MASSMORE_BNO08X_TARE_SET_REORIENTATION;
     /* P1..P8 = X, Y, Z, W as int16 Q14. Identity is (0,0,0,1.0) => W = 0x4000 */
     p[7] = 0x00;
     p[8] = 0x40;
-    return sendCommand(MASSMORE_CMD_TARE, p, 9);
+    return sendCommand(MASSMORE_BNO08X_CMD_TARE, p, 9);
 }
 
 /* --- power / reset -------------------------------------------------------- */
-massmore_status_t MassmoreBNO08x::softReset() {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
+Massmore_BNO08x_status_t Massmore_BNO08x::softReset() {
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
     _resetComplete = false;
-    _txBuf[4] = MASSMORE_EXEC_RESET;
-    if (!txPacket(MASSMORE_CH_EXECUTABLE, 1)) return _lastError;
+    _txBuf[4] = MASSMORE_BNO08X_EXEC_RESET;
+    if (!txPacket(MASSMORE_BNO08X_CH_EXECUTABLE, 1)) return _lastError;
 
     delay(100);
     memset(_advertReportLen, 0, sizeof(_advertReportLen));
     applyResetSettleDelay();
     updateAll(24);                               /* consume advert + reset complete */
-    return (_lastError = MASSMORE_OK);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
-massmore_status_t MassmoreBNO08x::hardwareReset() {
-    if (_rstPin < 0) return (_lastError = MASSMORE_ERR_UNSUPPORTED);
+Massmore_BNO08x_status_t Massmore_BNO08x::hardwareReset() {
+    if (_rstPin < 0) return (_lastError = MASSMORE_BNO08X_ERR_UNSUPPORTED);
     _resetComplete = false;
     digitalWrite(_rstPin, LOW);
     delay(10);
@@ -1718,20 +1778,20 @@ massmore_status_t MassmoreBNO08x::hardwareReset() {
     memset(_advertReportLen, 0, sizeof(_advertReportLen));
     applyResetSettleDelay();
     updateAll(24);
-    return (_lastError = MASSMORE_OK);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
-massmore_status_t MassmoreBNO08x::modeOn() {
-    _txBuf[4] = MASSMORE_EXEC_ON;
-    return txPacket(MASSMORE_CH_EXECUTABLE, 1) ? (_lastError = MASSMORE_OK) : _lastError;
+Massmore_BNO08x_status_t Massmore_BNO08x::modeOn() {
+    _txBuf[4] = MASSMORE_BNO08X_EXEC_ON;
+    return txPacket(MASSMORE_BNO08X_CH_EXECUTABLE, 1) ? (_lastError = MASSMORE_BNO08X_OK) : _lastError;
 }
 
-massmore_status_t MassmoreBNO08x::modeSleep() {
-    _txBuf[4] = MASSMORE_EXEC_SLEEP;
-    return txPacket(MASSMORE_CH_EXECUTABLE, 1) ? (_lastError = MASSMORE_OK) : _lastError;
+Massmore_BNO08x_status_t Massmore_BNO08x::modeSleep() {
+    _txBuf[4] = MASSMORE_BNO08X_EXEC_SLEEP;
+    return txPacket(MASSMORE_BNO08X_CH_EXECUTABLE, 1) ? (_lastError = MASSMORE_BNO08X_OK) : _lastError;
 }
 
-void MassmoreBNO08x::wake() {
+void Massmore_BNO08x::wake() {
     if (_wakePin < 0) return;
     digitalWrite(_wakePin, LOW);
     delayMicroseconds(50);
@@ -1739,40 +1799,40 @@ void MassmoreBNO08x::wake() {
     digitalWrite(_wakePin, HIGH);
 }
 
-massmore_status_t MassmoreBNO08x::requestOscillatorType() {
+Massmore_BNO08x_status_t Massmore_BNO08x::requestOscillatorType() {
     _oscillatorType = 0xFF;
-    massmore_status_t rc = sendCommand(MASSMORE_CMD_OSCILLATOR, nullptr, 0);
-    if (rc != MASSMORE_OK) return rc;
+    Massmore_BNO08x_status_t rc = sendCommand(MASSMORE_BNO08X_CMD_OSCILLATOR, nullptr, 0);
+    if (rc != MASSMORE_BNO08X_OK) return rc;
     uint32_t start = millis();
     while ((millis() - start) < 200) {
-        if (update() && _oscillatorType != 0xFF) return (_lastError = MASSMORE_OK);
+        if (update() && _oscillatorType != 0xFF) return (_lastError = MASSMORE_BNO08X_OK);
         delayMicroseconds(200);
     }
-    return (_lastError = MASSMORE_ERR_TIMEOUT);
+    return (_lastError = MASSMORE_BNO08X_ERR_TIMEOUT);
 }
 
-massmore_status_t MassmoreBNO08x::requestErrorList() {
+Massmore_BNO08x_status_t Massmore_BNO08x::requestErrorList() {
     uint8_t p[9] = {0};
     p[0] = 0;                                    /* severity 0 = all errors */
     _errorCount = 0;
-    massmore_status_t rc = sendCommand(MASSMORE_CMD_ERRORS, p, 9);
-    if (rc != MASSMORE_OK) return rc;
+    Massmore_BNO08x_status_t rc = sendCommand(MASSMORE_BNO08X_CMD_ERRORS, p, 9);
+    if (rc != MASSMORE_BNO08X_OK) return rc;
     uint32_t start = millis();
     while ((millis() - start) < 200) { update(); delayMicroseconds(200); }
-    return (_lastError = MASSMORE_OK);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
 /* ===========================================================================
  * SECTION 9 — FRS (flash record system)
  * ========================================================================= */
 
-massmore_status_t MassmoreBNO08x::readFrsRecord(uint16_t recordId,
+Massmore_BNO08x_status_t Massmore_BNO08x::readFrsRecord(uint16_t recordId,
                                                 uint32_t *dataOut,
                                                 uint16_t maxWords,
                                                 uint16_t &wordsRead,
                                                 uint32_t timeoutMs) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
-    if (!dataOut || maxWords == 0) return (_lastError = MASSMORE_ERR_BAD_PARAM);
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
+    if (!dataOut || maxWords == 0) return (_lastError = MASSMORE_BNO08X_ERR_BAD_PARAM);
 
     memset(dataOut, 0, (size_t)maxWords * sizeof(uint32_t));
     _frsTarget    = dataOut;
@@ -1785,13 +1845,13 @@ massmore_status_t MassmoreBNO08x::readFrsRecord(uint16_t recordId,
      * [0] 0xF4 [1] reserved [2..3] read offset [4..5] record ID [6..7] block size
      * A block size of 0 means "the whole record". */
     uint8_t *p = &_txBuf[4];
-    p[0] = MASSMORE_REPORT_FRS_READ_REQUEST;
+    p[0] = MASSMORE_BNO08X_REPORT_FRS_READ_REQUEST;
     p[1] = 0;
     p[2] = 0; p[3] = 0;
     p[4] = (uint8_t)(recordId & 0xFF);
     p[5] = (uint8_t)(recordId >> 8);
     p[6] = 0; p[7] = 0;
-    if (!txPacket(MASSMORE_CH_CONTROL, 8)) { _frsTarget = nullptr; return _lastError; }
+    if (!txPacket(MASSMORE_BNO08X_CH_CONTROL, 8)) { _frsTarget = nullptr; return _lastError; }
 
     uint32_t start = millis();
     while ((millis() - start) < timeoutMs && !_frsReadDone) {
@@ -1803,17 +1863,17 @@ massmore_status_t MassmoreBNO08x::readFrsRecord(uint16_t recordId,
     bool done  = _frsReadDone;
     _frsTarget = nullptr;
 
-    if (!done) return (_lastError = MASSMORE_ERR_TIMEOUT);
-    if (err && wordsRead == 0) return (_lastError = MASSMORE_ERR_BAD_RESPONSE);
-    return (_lastError = MASSMORE_OK);
+    if (!done) return (_lastError = MASSMORE_BNO08X_ERR_TIMEOUT);
+    if (err && wordsRead == 0) return (_lastError = MASSMORE_BNO08X_ERR_BAD_RESPONSE);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
-massmore_status_t MassmoreBNO08x::writeFrsRecord(uint16_t recordId,
+Massmore_BNO08x_status_t Massmore_BNO08x::writeFrsRecord(uint16_t recordId,
                                                  const uint32_t *data,
                                                  uint16_t words,
                                                  uint32_t timeoutMs) {
-    if (_busType == MASSMORE_BUS_NONE) return (_lastError = MASSMORE_ERR_NOT_READY);
-    if (!data || words == 0) return (_lastError = MASSMORE_ERR_BAD_PARAM);
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) return (_lastError = MASSMORE_BNO08X_ERR_NOT_READY);
+    if (!data || words == 0) return (_lastError = MASSMORE_BNO08X_ERR_BAD_PARAM);
 
     _frsWriteDone     = false;
     _frsWriteWantMore = false;
@@ -1822,13 +1882,13 @@ massmore_status_t MassmoreBNO08x::writeFrsRecord(uint16_t recordId,
     /* FRS Write Request — [2] §6.3.3:
      * [0] 0xF7 [1] reserved [2..3] length in words [4..5] record ID */
     uint8_t *p = &_txBuf[4];
-    p[0] = MASSMORE_REPORT_FRS_WRITE_REQUEST;
+    p[0] = MASSMORE_BNO08X_REPORT_FRS_WRITE_REQUEST;
     p[1] = 0;
     p[2] = (uint8_t)(words & 0xFF);
     p[3] = (uint8_t)(words >> 8);
     p[4] = (uint8_t)(recordId & 0xFF);
     p[5] = (uint8_t)(recordId >> 8);
-    if (!txPacket(MASSMORE_CH_CONTROL, 6)) return _lastError;
+    if (!txPacket(MASSMORE_BNO08X_CH_CONTROL, 6)) return _lastError;
 
     /* The device drives the pace: it answers every data packet with a write
      * response, and only when that response says "received" or "ready" do we
@@ -1844,7 +1904,7 @@ massmore_status_t MassmoreBNO08x::writeFrsRecord(uint16_t recordId,
 
             uint8_t *d = &_txBuf[4];
             memset(d, 0, 12);
-            d[0] = MASSMORE_REPORT_FRS_WRITE_DATA;
+            d[0] = MASSMORE_BNO08X_REPORT_FRS_WRITE_DATA;
             d[1] = 0;
             d[2] = (uint8_t)(offset & 0xFF);
             d[3] = (uint8_t)(offset >> 8);
@@ -1857,19 +1917,160 @@ massmore_status_t MassmoreBNO08x::writeFrsRecord(uint16_t recordId,
                 d[8]  = (uint8_t)(w1);       d[9]  = (uint8_t)(w1 >> 8);
                 d[10] = (uint8_t)(w1 >> 16); d[11] = (uint8_t)(w1 >> 24);
             }
-            if (!txPacket(MASSMORE_CH_CONTROL, 12)) return _lastError;
+            if (!txPacket(MASSMORE_BNO08X_CH_CONTROL, 12)) return _lastError;
         }
     }
 
-    if (!_frsWriteDone) return (_lastError = MASSMORE_ERR_TIMEOUT);
+    if (!_frsWriteDone) return (_lastError = MASSMORE_BNO08X_ERR_TIMEOUT);
     if (_frsWriteStatus != 3)                    /* 3 = write completed */
-        return (_lastError = MASSMORE_ERR_BAD_RESPONSE);
-    return (_lastError = MASSMORE_OK);
+        return (_lastError = MASSMORE_BNO08X_ERR_BAD_RESPONSE);
+    return (_lastError = MASSMORE_BNO08X_OK);
 }
 
-massmore_status_t MassmoreBNO08x::readSensorMetadata(uint16_t metadataRecordId,
+Massmore_BNO08x_status_t Massmore_BNO08x::readSensorMetadata(uint16_t metadataRecordId,
                                                      uint32_t *dataOut,
                                                      uint16_t maxWords,
                                                      uint16_t &wordsRead) {
     return readFrsRecord(metadataRecordId, dataOut, maxWords, wordsRead, 600);
+}
+
+/* ===========================================================================
+ * SECTION 10 — Massmore standard API
+ *   Simple Blocking API (readAll / readEulerDeg / readHeadingDeg) และ
+ *   identity helpers (verifyChipID / getSerialNumber / isGenuine)
+ * ========================================================================= */
+
+/* ตรวจว่ามีอุปกรณ์ ACK ที่ address นี้ (ใช้เฉพาะตอน begin) */
+bool Massmore_BNO08x::i2cProbe(uint8_t address) {
+    _i2c->beginTransmission(address);
+    return _i2c->endTransmission() == 0;
+}
+
+/* ถ้า sensor นี้ยังไม่ถูก enable ให้เปิดที่ SIMPLE_INTERVAL (50 Hz) */
+bool Massmore_BNO08x::ensureEnabled(uint8_t sensorId) {
+    if (sensorId >= 0x40) { _lastError = MASSMORE_BNO08X_ERR_BAD_PARAM; return false; }
+    if (_intervals[sensorId] != 0) return true;
+    return setFeature(sensorId, MASSMORE_BNO08X_SIMPLE_INTERVAL_US) == MASSMORE_BNO08X_OK;
+}
+
+bool Massmore_BNO08x::waitForReport(uint8_t sensorId, uint32_t timeoutMs) {
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) { _lastError = MASSMORE_BNO08X_ERR_NOT_READY; return false; }
+    if (!ensureEnabled(sensorId)) return false;
+    hasNewReport(sensorId);                      /* ล้าง flag เก่าก่อนรอของใหม่ */
+
+    uint32_t t0 = millis();
+    while ((uint32_t)(millis() - t0) < timeoutMs) {      /* rollover-safe */
+        if (update()) {
+            if (peekNewReport(sensorId)) {
+                hasNewReport(sensorId);
+                _lastError = MASSMORE_BNO08X_OK;
+                return true;
+            }
+        } else {
+            delayMicroseconds(200);
+        }
+    }
+    _lastError = MASSMORE_BNO08X_ERR_TIMEOUT;
+    return false;
+}
+
+bool Massmore_BNO08x::readAll(Massmore_BNO08x_reading_t &out, uint32_t timeoutMs) {
+    static const uint8_t kIds[4] = {
+        MASSMORE_BNO08X_SENSOR_ROTATION_VECTOR,
+        MASSMORE_BNO08X_SENSOR_ACCELEROMETER,
+        MASSMORE_BNO08X_SENSOR_GYROSCOPE,
+        MASSMORE_BNO08X_SENSOR_MAGNETIC_FIELD
+    };
+    if (_busType == MASSMORE_BNO08X_BUS_NONE) { _lastError = MASSMORE_BNO08X_ERR_NOT_READY; return false; }
+
+    for (uint8_t i = 0; i < 4; i++) {
+        if (!ensureEnabled(kIds[i])) return false;
+        hasNewReport(kIds[i]);
+    }
+
+    uint32_t t0  = millis();
+    uint8_t  got = 0;
+    while ((uint32_t)(millis() - t0) < timeoutMs) {      /* rollover-safe */
+        if (!update()) { delayMicroseconds(200); continue; }
+        got = 0;
+        for (uint8_t i = 0; i < 4; i++) if (peekNewReport(kIds[i])) got++;
+        if (got == 4) break;
+    }
+    if (got < 4) { _lastError = MASSMORE_BNO08X_ERR_TIMEOUT; return false; }
+
+    for (uint8_t i = 0; i < 4; i++) hasNewReport(kIds[i]);
+    getReadings(out);
+    _lastError = MASSMORE_BNO08X_OK;
+    return true;
+}
+
+bool Massmore_BNO08x::readEulerDeg(Massmore_BNO08x_euler_t &outDeg, uint32_t timeoutMs) {
+    if (!waitForReport(MASSMORE_BNO08X_SENSOR_ROTATION_VECTOR, timeoutMs)) return false;
+    outDeg = getEulerDeg();
+    return true;
+}
+
+float Massmore_BNO08x::readHeadingDeg(uint32_t timeoutMs) {
+    if (!waitForReport(MASSMORE_BNO08X_SENSOR_ROTATION_VECTOR, timeoutMs)) return NAN;
+    return getHeadingDeg();
+}
+
+void Massmore_BNO08x::getReadings(Massmore_BNO08x_reading_t &out) const {
+    out.quat        = _quat;
+    out.eulerDeg    = quaternionToEuler(_quat);
+    out.eulerDeg.roll  *= 57.2957795131f;
+    out.eulerDeg.pitch *= 57.2957795131f;
+    out.eulerDeg.yaw   *= 57.2957795131f;
+    out.headingDeg  = (out.eulerDeg.yaw < 0.0f) ? out.eulerDeg.yaw + 360.0f : out.eulerDeg.yaw;
+    out.accel       = _accel;
+    out.gyro        = _gyro;
+    out.mag         = _mag;
+    out.linearAccel = _linAccel;
+    out.gravity     = _gravity;
+    out.accuracyRV  = getAccuracy(MASSMORE_BNO08X_SENSOR_ROTATION_VECTOR);
+    out.accuracyMag = getAccuracy(MASSMORE_BNO08X_SENSOR_MAGNETIC_FIELD);
+    out.timestampUs = _timestampUs;
+}
+
+bool Massmore_BNO08x::verifyChipID() {
+    Massmore_BNO08x_auth_t a = verifyChip();
+    switch (a) {
+    case MASSMORE_BNO08X_AUTH_OK:
+        _lastError = MASSMORE_BNO08X_OK;
+        return true;
+    case MASSMORE_BNO08X_AUTH_NO_RESPONSE:
+        _lastError = MASSMORE_BNO08X_ERR_TIMEOUT;
+        return false;
+    default:
+        _lastError = MASSMORE_BNO08X_ERR_WRONG_ID;
+        return false;
+    }
+}
+
+uint32_t Massmore_BNO08x::getSerialNumber() {
+    uint64_t s = 0;
+    if (readSerialNumber(s) != MASSMORE_BNO08X_OK) return 0;
+    return (uint32_t)(s & 0xFFFFFFFFUL);
+}
+
+bool Massmore_BNO08x::verifyMotionEngine() {
+    /* Rotation Vector metadata — [2] §4.3: word 7 = Q point 1 (bits 15:0) และ
+     * Q point 2 (bits 31:16) ของแท้ต้องเป็น 14 และ 12 ตามลำดับ */
+    uint32_t meta[8];
+    uint16_t words = 0;
+    if (readSensorMetadata(MASSMORE_BNO08X_FRS_META_ROTATION_VECTOR, meta, 8, words)
+            != MASSMORE_BNO08X_OK || words < 8) {
+        return false;
+    }
+    uint16_t q1 = (uint16_t)(meta[7] & 0xFFFF);
+    uint16_t q2 = (uint16_t)((meta[7] >> 16) & 0xFFFF);
+    return (q1 == MASSMORE_BNO08X_META_RV_QPOINT1) && (q2 == MASSMORE_BNO08X_META_RV_QPOINT2);
+}
+
+bool Massmore_BNO08x::isGenuine() {
+    Massmore_BNO08x_auth_t a = verifyChip();
+    if (a == MASSMORE_BNO08X_AUTH_OK) return true;            /* known factory SH-2 build */
+    if (a != MASSMORE_BNO08X_AUTH_UNKNOWN_FW) return false;   /* no / malformed response */
+    /* firmware ใหม่กว่าตาราง: ยอมรับเมื่อ MotionEngine metadata ตรง signature */
+    return verifyMotionEngine();
 }

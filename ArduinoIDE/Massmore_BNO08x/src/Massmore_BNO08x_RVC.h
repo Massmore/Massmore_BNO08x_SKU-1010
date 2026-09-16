@@ -1,8 +1,12 @@
 /*!
  * @file  Massmore_BNO08x_RVC.h
- * @brief UART-RVC mode driver for the BNO085 / BNO086.
+ * @brief Driver โหมด UART-RVC สำหรับ BNO085 / BNO086 (คลาส Massmore_BNO08x_RVC)
  *
- * UART-RVC ("Robot Vacuum Cleaner" mode) is the simplest way to use the sensor:
+ * UART-RVC ("Robot Vacuum Cleaner" mode) คือวิธีใช้เซ็นเซอร์ที่ง่ายที่สุด: strap ขา 2 ขา
+ * ต่อสายเส้นเดียวจาก TX ของเซ็นเซอร์ไป RX ของ MCU แล้วชิปจะ stream heading และ
+ * acceleration ที่ 100 Hz โดย host ไม่ต้องส่งคำสั่งใด ๆ (ไม่มี SHTP, ไม่ต้อง config)
+ *
+ * English summary: UART-RVC ("Robot Vacuum Cleaner" mode) is the simplest way to use the sensor:
  * strap PS1 low and PS0 high (the P1 and P0 pads on the Massmore board),
  * connect one wire from the sensor's TX to an RX on
  * your MCU, and the part streams heading and acceleration at 100 Hz with no
@@ -10,7 +14,7 @@
  *
  * Trade-offs versus SHTP mode: you get yaw/pitch/roll and 3-axis acceleration
  * only, at a fixed 100 Hz, with no quaternion, no calibration control and no
- * tare. If you need any of those, use the MassmoreBNO08x class instead.
+ * tare. If you need any of those, use the Massmore_BNO08x class instead.
  *
  * Wiring (Datasheet [1] §1.2.5, Figure 1-23):
  *   PS1 -> GND, PS0 -> VDDIO, BOOTN -> 10k to VDDIO, sensor TX -> MCU RX.
@@ -34,7 +38,7 @@
 #include <Arduino.h>
 #include "Massmore_BNO08x_Defs.h"
 
-/*! One decoded UART-RVC frame. */
+/*! หนึ่ง frame ของ UART-RVC ที่ถอดรหัสแล้ว */
 typedef struct {
     uint8_t index;      //!< 0..255, increments once per report — use it to spot drops
     float   yaw;        //!< degrees, -180..180
@@ -45,33 +49,33 @@ typedef struct {
     float   accelZ;     //!< m/s^2
     uint8_t motionIntent;   //!< BNO086 only, otherwise reserved
     uint8_t motionRequest;  //!< BNO086 only, otherwise reserved
-} massmore_rvc_report_t;
+} Massmore_BNO08x_rvc_report_t;
 
 /*!
- * @class MassmoreBNO08x_RVC
- * @brief Decoder for the BNO08x UART-RVC output stream.
+ * @class Massmore_BNO08x_RVC
+ * @brief ตัวถอดรหัส stream UART-RVC ของ BNO08x (Non-blocking, ไม่ใช้ heap)
  *
  * @code
- *   MassmoreBNO08x_RVC rvc;
+ *   Massmore_BNO08x_RVC rvc;
  *   void setup() {
  *     Serial.begin(115200);
  *     Serial1.begin(115200, SERIAL_8N1, 16, 17);   // ESP32: RX=16, TX=17
  *     rvc.begin(Serial1);
  *   }
  *   void loop() {
- *     massmore_rvc_report_t r;
+ *     Massmore_BNO08x_rvc_report_t r;
  *     if (rvc.read(r)) Serial.println(r.yaw);
  *   }
  * @endcode
  */
-class MassmoreBNO08x_RVC {
+class Massmore_BNO08x_RVC {
 public:
-    MassmoreBNO08x_RVC() : _uart(nullptr), _idx(0), _badChecksums(0) {}
+    Massmore_BNO08x_RVC() : _uart(nullptr), _idx(0), _badChecksums(0) {}
 
     /*!
-     * @brief Attach to an already-begun serial port (115200 8N1).
-     * @return always true — RVC is a one way stream, so there is nothing to
-     *         probe. Call read() and check that frames start arriving.
+     * @brief  ผูกกับ serial port ที่ sketch begin() ไว้แล้ว (115200 8N1)
+     * @return true เสมอ — RVC เป็น stream ทางเดียว จึงไม่มีอะไรให้ probe
+     *         ให้เรียก read() แล้วดูว่ามี frame เข้ามาหรือไม่
      */
     bool begin(Stream &serialPort) {
         _uart = &serialPort;
@@ -81,11 +85,11 @@ public:
     }
 
     /*!
-     * @brief Non-blocking frame decoder. Call it often from loop().
-     * @param out Receives the decoded frame.
-     * @return true when a complete, checksum-valid frame was decoded.
+     * @brief  ถอดรหัส frame แบบ Non-blocking — เรียกบ่อย ๆ จาก loop()
+     * @param  out รับ frame ที่ถอดรหัสแล้ว
+     * @return true เมื่อได้ frame ครบและ checksum ถูกต้อง
      */
-    bool read(massmore_rvc_report_t &out) {
+    bool read(Massmore_BNO08x_rvc_report_t &out) {
         if (!_uart) return false;
 
         while (_uart->available()) {
@@ -125,7 +129,7 @@ public:
         return false;
     }
 
-    /*! @brief How many frames have been dropped for a bad checksum. */
+    /*! @brief จำนวน frame ที่ถูกทิ้งเพราะ checksum ผิด */
     uint32_t getChecksumErrors() const { return _badChecksums; }
 
 private:
