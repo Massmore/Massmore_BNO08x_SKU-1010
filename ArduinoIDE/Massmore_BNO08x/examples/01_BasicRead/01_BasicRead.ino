@@ -5,14 +5,19 @@
   Euler angles (roll / pitch / yaw / heading), accelerometer, gyroscope, magnetometer
 
   Wiring (I2C) — ชื่อขาตามที่พิมพ์บนบอร์ด Massmore Halley V2
-    Halley V2      ESP32 (Classic)   ESP32-S3        Arduino Nano
-    ---------      ---------------   --------        ------------
+    Halley V2      ESP32 (Classic)   ESP32-S3 (MOMO) Arduino Nano
+    ---------      ---------------   ---------------  ------------
     3Vo / 5V   ->  3V3 / 5V          3V3 / 5V        5V (บอร์ดมี 3.3 V LDO)
     GND        ->  GND               GND             GND
-    SDA        ->  GPIO 21           GPIO 8          A4
-    SCL        ->  GPIO 22           GPIO 9          A5
+    SDA        ->  GPIO 21           GPIO 14         A4
+    SCL        ->  GPIO 22           GPIO 15         A5
     DI         ->  ปล่อยลอย = 0x4A (ค่า default ของบอร์ด Massmore), ต่อ 3Vo = 0x4B
-    INT / RST  ->  ไม่ต้องต่อในตัวอย่างนี้ (driver ใช้ polling)
+    RST        ->  GPIO 17           -               -     (แนะนำ; ไม่ต่อให้ตั้ง RST_PIN = -1)
+    INT        ->  ไม่ต้องต่อในตัวอย่างนี้ (driver ใช้ polling)
+
+  ทำไมควรต่อ RST: ถ้า MCU ถูก reset (อัปโหลดโปรแกรม / กดปุ่ม) ขณะชิปกำลังส่งข้อมูล
+  BNO08x อาจกด SDA/SCL ค้างไว้ — driver ใช้ขา RST reset ชิปใน begin() ให้ bus กลับมาเอง
+  ถ้าไม่ต่อ ต้องถอดไฟเซ็นเซอร์ (begin() จะแจ้ง "Bus I/O error")
 
   หมายเหตุ: BNO08x ใช้ I2C clock stretching — เริ่มที่ 100 kHz จะเสถียรที่สุด
 
@@ -23,12 +28,16 @@
 #include <Massmore_BNO08x.h>
 
 // ---- ปรับให้ตรงกับบอร์ดของคุณ (pin ถูกกำหนดใน sketch เท่านั้น ไม่ใช่ในไลบรารี) ----
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-  #define I2C_SDA_PIN  8
-  #define I2C_SCL_PIN  9
+#if defined(CONFIG_IDF_TARGET_ESP32S3)       // MOMO by Massmore (ESP32-S3 + CH343P)
+  #define I2C_SDA_PIN  14
+  #define I2C_SCL_PIN  15
 #elif defined(ARDUINO_ARCH_ESP32)
   #define I2C_SDA_PIN  21
   #define I2C_SCL_PIN  22
+  #define RST_PIN      17       // -1 = ไม่ต่อ
+#endif
+#ifndef RST_PIN
+  #define RST_PIN      -1       // ไม่ต่อ RST
 #endif
 #define I2C_ADDRESS   MASSMORE_BNO08X_I2C_ADDR_DEF   // 0x4A — driver ลอง 0x4B ให้เองถ้าไม่พบ
 // -------------------------------------------------------------------------------
@@ -48,7 +57,7 @@ void setup() {
 #endif
   Wire.setClock(100000);
 
-  if (!imu.begin(I2C_ADDRESS, Wire)) {
+  if (!imu.begin(I2C_ADDRESS, Wire, -1, RST_PIN)) {
     Serial.print(F("BNO08x not found: "));
     Serial.println(Massmore_BNO08x::statusToString(imu.lastError()));
     Serial.println(F("Check wiring, power (3.3 V) and the DI pad (0x4A / 0x4B)."));

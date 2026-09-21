@@ -6,17 +6,19 @@
   (ไม่มี I2C, ไม่มี SHTP, ไม่ต้อง config) — เหมาะกับหุ่นยนต์ที่ต้องการแค่ heading
 
   WIRING — โหมดถูก latch ตอน reset
-    Halley V2       ESP32 (Classic)   ESP32-S3    Arduino Nano
-    ---------       ---------------   --------    ------------
-    3Vo         ->  3V3               3V3         3V3 (UART pad เป็น 3.3 V — Nano ต้องใช้ level shifter)
-    GND         ->  GND               GND         GND
-    SDA (TX)    ->  GPIO 16 (RX)      GPIO 16     D2 (SoftwareSerial RX)
-    P1          ->  GND
-    P0          ->  3Vo
+    Halley V2       ESP32 (Classic)   ESP32-S3 (MOMO)  Arduino Nano
+    ---------       ---------------   ---------------  ------------
+    3Vo         ->  3V3               3V3              3V3 (UART pad เป็น 3.3 V — Nano ต้องใช้ level shifter)
+    GND         ->  GND               GND              GND
+    SDA (TX)    ->  GPIO 21 (RX)      GPIO 14 (RX)     D2 (SoftwareSerial RX)
+    SCL         ->  GPIO 22 (ไม่ใช้)   GPIO 15 (ไม่ใช้)   -   (สายเดิมจาก I2C ต่อทิ้งไว้ได้)
+    RST         ->  GPIO 17           -                -   (แนะนำ: sketch reset ชิปให้ latch โหมด RVC)
+    P1 (PS1)    ->  GND  (LOW)
+    P0 (PS0)    ->  3Vo  (HIGH)
     BT          ->  ปล่อยลอย
+  ถ้าไม่ได้ต่อ RST ให้ถอดไฟเซ็นเซอร์หลังเปลี่ยน P0/P1 ไม่อย่างนั้นชิปจะยังอยู่โหมดเดิม
 
-  ในโหมดนี้ pad SDA คือ TX ของเซ็นเซอร์ (115200 8N1) ต้องต่อที่ระดับ 3.3 V ตรง ๆ
-  เพราะ level shifter บนบอร์ดออกแบบสำหรับ I2C แบบ open-drain ไม่ใช่ push-pull UART
+  ในโหมดนี้ pad SDA คือ TX ของเซ็นเซอร์ (115200 8N1) — MCU 3.3 V ต่อตรงได้
 
   ได้: yaw/pitch/roll (0.01°), accel 3 แกน, 100 Hz, สายเส้นเดียว
   ไม่ได้: quaternion, calibration control, tare, report อื่น ๆ
@@ -26,15 +28,22 @@
 
 #include <Massmore_BNO08x_RVC.h>
 
-#if defined(ARDUINO_ARCH_ESP32)
-  #define RVC_RX_PIN  16      // ต่อกับ pad SDA (TX ของเซ็นเซอร์)
-  #define RVC_TX_PIN  17      // RVC ไม่ใช้ แต่ HardwareSerial ต้องมีขา
+#if defined(CONFIG_IDF_TARGET_ESP32S3)       // MOMO by Massmore (ESP32-S3 + CH343P)
+  #define RVC_RX_PIN  14      // ต่อกับ pad SDA (TX ของเซ็นเซอร์)
+  #define RVC_TX_PIN  15      // RVC ไม่ใช้ แต่ HardwareSerial ต้องมีขา
+  #define RST_PIN     -1
+  HardwareSerial &rvcSerial = Serial1;
+#elif defined(ARDUINO_ARCH_ESP32)
+  #define RVC_RX_PIN  21      // ต่อกับ pad SDA (TX ของเซ็นเซอร์)
+  #define RVC_TX_PIN  22      // RVC ไม่ใช้ แต่ HardwareSerial ต้องมีขา
+  #define RST_PIN     17      // -1 = ไม่ต่อ
   HardwareSerial &rvcSerial = Serial1;
 #else
   #include <SoftwareSerial.h>   // AVR core built-in (ไม่ใช่ dependency ภายนอก)
   #define RVC_RX_PIN  2
   #define RVC_TX_PIN  3
   SoftwareSerial rvcSerial(RVC_RX_PIN, RVC_TX_PIN);
+  #define RST_PIN     -1
 #endif
 
 Massmore_BNO08x_RVC rvc;
@@ -46,6 +55,15 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
   Serial.println(F("\nMassmore_BNO08x - 06_UART_RVC"));
+
+  // โหมดถูก latch ตอน reset: ถ้าต่อ RST ไว้ reset ชิปหนึ่งครั้ง แล้วรอให้เริ่ม stream
+  if (RST_PIN >= 0) {
+    pinMode(RST_PIN, OUTPUT);
+    digitalWrite(RST_PIN, LOW);
+    delay(10);
+    digitalWrite(RST_PIN, HIGH);
+    delay(300);
+  }
 
   // sketch เป็นเจ้าของ UART
 #if defined(ARDUINO_ARCH_ESP32)

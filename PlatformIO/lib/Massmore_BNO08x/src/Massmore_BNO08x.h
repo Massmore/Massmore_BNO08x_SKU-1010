@@ -91,7 +91,8 @@ public:
      * @param  csPin    Chip select (H_CSN — pad CS)
      * @param  intPin   H_INTN (pad INT) — จำเป็นสำหรับ SPI เพราะ SHTP over SPI ไม่มีวิธี poll
      * @param  rstPin   NRST (pad RST) — จำเป็น เพราะต้อง reset ขณะ PS0/PS1 = HIGH เพื่อ latch โหมด SPI
-     * @param  wakePin  PS0/WAKE (pad P0) หรือ -1 — ใช้ปลุกชิปจาก sleep
+     * @param  wakePin  PS0/WAKE (pad P0) — จำเป็น: host ส่งคำสั่งได้เฉพาะตอนปลุกชิปด้วยขานี้
+     *                  (ต่อ P0 เข้า 3Vo ตรง ๆ ใช้ไม่ได้ — ส่ง -1 จะได้ ERR_BAD_PARAM)
      * @param  spiPort  SPIClass ที่ใช้ (sketch ต้องเรียก SPI.begin() มาก่อน)
      * @param  speedHz  SPI clock (datasheet ระบุสูงสุด 3 MHz)
      */
@@ -103,7 +104,7 @@ public:
     /*!
      * @brief  เริ่มต้นเซ็นเซอร์แบบ SHTP-over-UART ที่ 3 Mbit/s (strap PS1=1, PS0=0)
      * @param  serialPort Stream ที่ begin() แล้ว (HardwareSerial ฯลฯ)
-     * @param  intPin     H_INTN (pad INT) หรือ -1
+     * @param  intPin     H_INTN (pad INT) หรือ -1 — ใช้แค่รอชิปหลัง reset (UART ไม่อ่านตาม INT)
      * @param  rstPin     NRST (pad RST) หรือ -1
      * @note   ไม่ใช่ UART-RVC — โหมด RVC 100 Hz แบบง่ายใช้คลาส Massmore_BNO08x_RVC
      */
@@ -219,10 +220,21 @@ public:
     /*!
      * @brief  ตรวจ "CHIP_ID" ของ BNO08x — ชิปไม่มี WHO_AM_I register แต่ใช้
      *         SH-2 Product ID Response (report 0xF8) แทน: firmware part number
-     *         ต้องตรงกับ SH-2 application build ที่รู้จัก (10003606 / 10004095)
+     *         ต้องตรงกับ SH-2 application build ที่รู้จัก (10003606 / 10004095 / 10004563)
      * @return true ถ้า Product ID ตรง; false → lastError() = ERR_WRONG_ID / ERR_TIMEOUT
      */
     bool verifyChipID();
+
+    /*!
+     * @brief  ระบุรุ่นชิป BNO085 / BNO086 จาก firmware part number
+     *         (10004563 / 10004095 = BNO086) และ report เฉพาะ BNO086
+     *         (0x2B–0x2D) ใน SHTP advertisement
+     * @return MASSMORE_BNO08X_CHIP_* — UNKNOWN ถ้ายังไม่ได้ Product ID หรือแยกไม่ได้
+     */
+    Massmore_BNO08x_chip_t getChipModel() const;
+
+    /*! @brief ชื่อรุ่นชิป เช่น "BNO086" */
+    static const char *chipModelToString(Massmore_BNO08x_chip_t c);
 
     /*!
      * @brief  อ่าน serial number จาก FRS record 0x4B4B (32 bit ล่าง)
@@ -700,13 +712,15 @@ private:
     bool     _frsWriteWantMore;
     uint8_t  _frsWriteStatus;
     bool     _resetComplete;
+    bool     _busHeld;          //!< i2cProbe(): the transfer timed out (SDA/SCL held low)
     bool     _getFeatureResponse;
 
     void (*_reportCb)(uint8_t, void *);
     void  *_reportCbCtx;
 
     /* ---- internals ---------------------------------------------------- */
-    bool  i2cProbe(uint8_t address);
+    bool  i2cProbe(uint8_t address);   //!< sets _busHeld on a bus timeout
+    void  discardStaleUart();          //!< drop the RX backlog before a blocking read
     bool  waitForInt(uint32_t timeoutMs);
     bool  receivePacket();
     bool  i2cReceivePacket();

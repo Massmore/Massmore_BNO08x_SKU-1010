@@ -1,6 +1,6 @@
 #include <Arduino.h>
 /*
-  07_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
+  08_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
   ---------------------------------------------------------------------------
   ใช้ตรวจบอร์ด Massmore BNO08x SKU-1010 ก่อนส่งลูกค้า และให้เว็บ
   Massmore Web Serial Monitor อ่านผลอัตโนมัติ — รันเองทันทีหลังบูต
@@ -23,13 +23,15 @@
     #MASSMORE_FACTORY_TEST v1.0
     #PRODUCT Massmore_BNO08x
     #MCU ESP32
+    #CHIP <BNO085|BNO086|BNO08x>          (รุ่นชิปที่อ่านได้จาก Product ID — ข้อมูล ไม่ใช่ PASS/FAIL)
     #RESULT <TEST_NAME> <PASS|FAIL> <value>
     #VERDICT <PASS|FAIL> [<REASON>]
     [PASS] SENSOR QA PASSED - READY TO SHIP   หรือ   [FAIL] QA CHECK FAILED: <REASON>
 
-  Default wiring (Primary test MCU = ESP32 Classic, I2C / Qwiic)
-    Halley V2  SDA -> GPIO 21,  SCL -> GPIO 22,  3Vo -> 3V3,  GND -> GND
-    INT / RST ไม่ต้องต่อ · DI ปล่อยลอย (0x4A) · BT / P0 / P1 ปล่อยลอย
+  Default wiring (I2C / Qwiic)
+    ESP32 Classic   : Halley V2  SDA -> GPIO 21,  SCL -> GPIO 22,  3Vo -> 3V3,  GND -> GND
+    ESP32-S3 (MOMO) : Halley V2  SDA -> GPIO 14,  SCL -> GPIO 15,  3Vo -> 3V3,  GND -> GND
+    INT / RST ไม่บังคับ (ไม่ต่อให้ตั้ง FT_INT_PIN / FT_RST_PIN = -1) · DI ปล่อยลอย (0x4A) · BT / P0 / P1 ปล่อยลอย
   Pin ถูก hardcode ไว้ "เฉพาะใน sketch นี้" ไม่ใช่ในไลบรารี
 
   วางบอร์ดนิ่ง ๆ บนโต๊ะระหว่างทดสอบ · พิมพ์ 'r' + Enter เพื่อทดสอบซ้ำ
@@ -42,21 +44,29 @@
 #include <Massmore_BNO08x.h>
 
 /* ---------------- Factory Test wiring (ปรับได้ที่นี่เท่านั้น) ------------------ */
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-  #define FT_SDA_PIN   8
-  #define FT_SCL_PIN   9
+#if defined(CONFIG_IDF_TARGET_ESP32S3)      // MOMO by Massmore (ESP32-S3 + CH343P)
+  #define FT_SDA_PIN   14
+  #define FT_SCL_PIN   15
+  #define FT_INT_PIN   (-1)
+  #define FT_RST_PIN   (-1)
   #define FT_MCU_NAME  "ESP32-S3"
 #elif defined(ARDUINO_ARCH_ESP32)
   #define FT_SDA_PIN   21
   #define FT_SCL_PIN   22
+  #define FT_INT_PIN   (-1)      /* ต่อ INT ให้ใส่เลข GPIO เช่น 4 */
+  #define FT_RST_PIN   (-1)      /* ต่อ RST ให้ใส่เลข GPIO เช่น 17 — driver reset ชิปเองได้ */
   #define FT_MCU_NAME  "ESP32"
 #elif defined(__AVR__)
   #define FT_MCU_NAME  "AVR_NANO"
 #else
   #define FT_MCU_NAME  "UNKNOWN"
 #endif
-#define FT_INT_PIN     (-1)
-#define FT_RST_PIN     (-1)
+#ifndef FT_INT_PIN
+  #define FT_INT_PIN   (-1)
+#endif
+#ifndef FT_RST_PIN
+  #define FT_RST_PIN   (-1)
+#endif
 #define FT_I2C_HZ      100000UL
 #define FT_SAMPLES     20
 /* -------------------------------------------------------------------------- */
@@ -149,7 +159,18 @@ static void runFactoryTest() {
   bool idOk = imu.verifyChipID();
   ftResult(F("CHIP_ID"), idOk);
   Serial.println(id.swPartNumber);
+  for (uint8_t i = 0; i < imu.getProductIDCount(); i++) {
+    const Massmore_BNO08x_product_id_t &e = imu.getProductID(i);
+    Serial.print(F("  part ")); Serial.print(e.swPartNumber);
+    Serial.print(F(" v"));      Serial.print(e.swVersionMajor); Serial.print('.');
+    Serial.print(e.swVersionMinor); Serial.print('.'); Serial.print(e.swVersionPatch);
+    Serial.print(F(" build ")); Serial.println(e.swBuildNumber);
+  }
   if (!idOk) ftFail(F("CHIP_ID_MISMATCH"));
+
+  /* CHIP model (BNO085 / BNO086) — informational, never fails the test ---- */
+  Serial.print(F("#CHIP "));
+  Serial.println(Massmore_BNO08x::chipModelToString(imu.getChipModel()));
 
   /* 3. FW_VERSION --------------------------------------------------------- */
   bool fwOk = (id.swVersionMajor >= 1 && id.swVersionMajor <= 9 && id.swBuildNumber != 0);
@@ -253,7 +274,7 @@ void setup() {
 #endif
   Wire.setClock(FT_I2C_HZ);
 
-  Serial.println(F("\nMassmore_BNO08x - 07_Factory_Test (keep the board still)"));
+  Serial.println(F("\nMassmore_BNO08x - 08_Factory_Test (keep the board still)"));
   runFactoryTest();
 }
 

@@ -9,7 +9,7 @@
   ทุกตัวจับเวลาด้วย millis() แบบ rollover-safe: (uint32_t)(millis() - t0) >= period
 
   Wiring (I2C): เหมือน 01_BasicRead — ต่อ INT เพิ่มจะได้ประสิทธิภาพสูงสุด
-    ESP32: SDA 21 / SCL 22 / INT 4      ESP32-S3: SDA 8 / SCL 9 / INT 4
+    ESP32: SDA 21 / SCL 22 / INT 4 / RST 17      ESP32-S3 (MOMO): SDA 14 / SCL 15 / INT -1 (ไม่ต่อ)
     Nano : SDA A4 / SCL A5 / INT D2
 
   Designed and Manufactured by Massmore — https://www.massmore.shop
@@ -18,16 +18,19 @@
 #include <Wire.h>
 #include <Massmore_BNO08x.h>
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-  #define I2C_SDA_PIN  8
-  #define I2C_SCL_PIN  9
-  #define INT_PIN      4
+#if defined(CONFIG_IDF_TARGET_ESP32S3)       // MOMO by Massmore (ESP32-S3 + CH343P)
+  #define I2C_SDA_PIN  14
+  #define I2C_SCL_PIN  15
+  #define INT_PIN      -1       // ไม่ต่อ INT = polling; ต่อจริงแล้วใส่เลข GPIO
+  #define RST_PIN      -1
 #elif defined(ARDUINO_ARCH_ESP32)
   #define I2C_SDA_PIN  21
   #define I2C_SCL_PIN  22
   #define INT_PIN      4
+  #define RST_PIN      17       // -1 = ไม่ต่อ
 #else
   #define INT_PIN      2
+  #define RST_PIN      -1
 #endif
 #define I2C_ADDRESS   MASSMORE_BNO08X_I2C_ADDR_DEF
 
@@ -58,7 +61,7 @@ void setup() {
 #endif
   Wire.setClock(100000);
 
-  if (!imu.begin(I2C_ADDRESS, Wire, INT_PIN)) {
+  if (!imu.begin(I2C_ADDRESS, Wire, INT_PIN, RST_PIN)) {
     Serial.print(F("BNO08x not found: "));
     Serial.println(Massmore_BNO08x::statusToString(imu.lastError()));
     while (true) delay(100);

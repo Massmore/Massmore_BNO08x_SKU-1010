@@ -59,7 +59,7 @@ typedef struct {
  *   Massmore_BNO08x_RVC rvc;
  *   void setup() {
  *     Serial.begin(115200);
- *     Serial1.begin(115200, SERIAL_8N1, 16, 17);   // ESP32: RX=16, TX=17
+ *     Serial1.begin(115200, SERIAL_8N1, 21, 22);   // ESP32: RX=21 (pad SDA), TX=22
  *     rvc.begin(Serial1);
  *   }
  *   void loop() {

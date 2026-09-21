@@ -25,7 +25,7 @@
     t  clear tare ที่บันทึกไว้
     h  แสดงคำสั่ง
 
-  Wiring (I2C): เหมือน 01_BasicRead
+  Wiring (I2C): เหมือน 01_BasicRead (ESP32: RST → GPIO 17 แนะนำ)
 
   Designed and Manufactured by Massmore — https://www.massmore.shop
 */
@@ -33,12 +33,16 @@
 #include <Wire.h>
 #include <Massmore_BNO08x.h>
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-  #define I2C_SDA_PIN  8
-  #define I2C_SCL_PIN  9
+#if defined(CONFIG_IDF_TARGET_ESP32S3)       // MOMO by Massmore (ESP32-S3 + CH343P)
+  #define I2C_SDA_PIN  14
+  #define I2C_SCL_PIN  15
 #elif defined(ARDUINO_ARCH_ESP32)
   #define I2C_SDA_PIN  21
   #define I2C_SCL_PIN  22
+  #define RST_PIN      17       // -1 = ไม่ต่อ
+#endif
+#ifndef RST_PIN
+  #define RST_PIN      -1       // ไม่ต่อ RST
 #endif
 #define I2C_ADDRESS   MASSMORE_BNO08X_I2C_ADDR_DEF
 
@@ -67,7 +71,7 @@ void setup() {
 #endif
   Wire.setClock(100000);
 
-  if (!imu.begin(I2C_ADDRESS, Wire)) {
+  if (!imu.begin(I2C_ADDRESS, Wire, -1, RST_PIN)) {
     Serial.print(F("BNO08x not found: "));
     Serial.println(Massmore_BNO08x::statusToString(imu.lastError()));
     while (true) delay(100);

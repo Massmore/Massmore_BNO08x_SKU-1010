@@ -151,12 +151,12 @@ static const uint8_t kFallbackReportLen[0x40] PROGMEM = {
  * ------------------------------------------------------------------------- */
 static const uint32_t kKnownPartNumbers[] = {
     10003606UL,   /* BNO080 / BNO085 / BNO086 SH-2 application */
-    10004095UL    /* seen on later BNO086 production builds     */
+    10004095UL,   /* seen on later BNO086 production builds     */
+    10004563UL    /* BNO086 SH-2 v3.12.x — the only response on
+                     parts tested 2026-09 (build 62, Q14/12 meta) */
 };
-/* Companion images answer the same request with their own part numbers —
- * 10004563 has been observed alongside 10003606 on genuine BNO086 parts. They
- * are not SH-2 applications, so they are deliberately NOT in the table above;
- * verifyChip() looks at every response, so one match is enough. */
+/* Some parts also answer with companion images carrying their own part
+ * numbers; verifyChip() looks at every response, so one match is enough. */
 static const uint8_t kKnownPartCount =
     sizeof(kKnownPartNumbers) / sizeof(kKnownPartNumbers[0]);
 
@@ -239,6 +239,7 @@ void Massmore_BNO08x::resetState() {
     _frsWriteWantMore = false;
     _frsWriteStatus = 0xFF;
     _resetComplete = false;
+    _busHeld       = false;
     _getFeatureResponse = false;
 }
 
@@ -312,6 +313,14 @@ bool Massmore_BNO08x::begin(uint8_t address, TwoWire &wirePort,
     /* มีอุปกรณ์ ACK ที่ address นี้ไหม? ถ้าไม่ ให้ลอง address อีกตัว (0x4A <-> 0x4B)
      * เพราะทั้งสองค่าคือ BNO08x ตัวเดียวกันที่ต่างกันแค่ระดับขา DI (SA0) */
     if (!i2cProbe(_i2cAddr)) {
+        if (_busHeld) {
+            /* BNO08x ค้างกด SDA/SCL — เกิดเมื่อ MCU reset ระหว่างอ่าน I2C ขณะที่ชิป
+             * กำลัง stream report กู้ได้ด้วยขา RST (ส่ง rstPin ให้ begin()) หรือตัดไฟเซ็นเซอร์ */
+            dbgPrintf(PSTR("[massmore] I2C bus held low at 0x%02X - wire RST or power-cycle the sensor\n"), _i2cAddr);
+            _lastError = MASSMORE_BNO08X_ERR_IO;
+            _busType   = MASSMORE_BNO08X_BUS_NONE;
+            return false;
+        }
         uint8_t alt = (_i2cAddr == MASSMORE_BNO08X_I2C_ADDR_LOW)
                           ? MASSMORE_BNO08X_I2C_ADDR_HIGH
                           : MASSMORE_BNO08X_I2C_ADDR_LOW;
@@ -349,9 +358,14 @@ bool Massmore_BNO08x::begin(uint8_t address, TwoWire &wirePort,
 bool Massmore_BNO08x::beginSPI(int8_t csPin, int8_t intPin, int8_t rstPin,
                               int8_t wakePin, SPIClass &spiPort,
                               uint32_t speedHz) {
-    if (csPin < 0 || intPin < 0 || rstPin < 0) {
+    if (csPin < 0 || intPin < 0 || rstPin < 0 || wakePin < 0) {
         /* SPI mode is latched by the state of PS0/PS1 at the release of NRST,
-         * and SHTP over SPI has no way to poll, so both pins are mandatory. */
+         * and SHTP over SPI has no way to poll, so INT and RST are mandatory.
+         * WAKE (PS0) is mandatory too: the hub only listens while it asserts
+         * H_INTN, and once idle it never asserts it on its own. With P0 tied
+         * high the host cannot send a single command (tested on BNO086: the
+         * Product ID request was clocked out and ignored). */
+        dbgPrintf(PSTR("[massmore] beginSPI needs CS, INT, RST and WAKE (P0) pins\n"));
         _lastError = MASSMORE_BNO08X_ERR_BAD_PARAM;
         return false;
     }
@@ -453,7 +467,15 @@ bool Massmore_BNO08x::waitForInt(uint32_t timeoutMs) {
 /*
  * SHTP over I2C — [3] §3.2. Every transfer must end with a STOP, so we read
  * the 4 byte header first to learn the cargo length, then pull the payload in
- * chunks. The hub repeats a header at the start of every chunk; we discard it.
+ * chunks. The hub puts a header at the start of every chunk (continuation bit
+ * set, length = bytes still to come + 4) and we check it rather than trusting
+ * the first peek:
+ *   - a cargo larger than one chunk can come back with an EMPTY header (0x0000)
+ *     when the hub has not queued the next part yet. Reading that transfer as
+ *     payload fills the tail of the packet with zeros (seen on BNO086 as a
+ *     quaternion with real ~= 0 and accuracy = 0), so we wait and ask again.
+ *   - a peek that already has the continuation bit set is the rest of a packet
+ *     we gave up on. Its cargo starts mid-report, so we drain it and drop it.
  */
 bool Massmore_BNO08x::i2cReceivePacket() {
     uint8_t got = _i2c->requestFrom((uint8_t)_i2cAddr, (uint8_t)4);
@@ -469,6 +491,7 @@ bool Massmore_BNO08x::i2cReceivePacket() {
     uint16_t len = raw & 0x7FFF;                /* bit 15 = continuation flag  */
     if (len <= 4) return false;                 /* 0 = no cargo, null header   */
     len -= 4;
+    bool orphan = (raw & 0x8000) != 0;          /* tail of an abandoned packet */
 
     _rxChannel = ch;
     _rxSeq     = seq;
@@ -478,20 +501,35 @@ bool Massmore_BNO08x::i2cReceivePacket() {
     while (remaining > 0) {
         uint16_t chunk = remaining;
         if (chunk > (uint16_t)(_i2cChunk - 4)) chunk = _i2cChunk - 4;
-
         uint8_t want = (uint8_t)(chunk + 4);
-        if (_i2c->requestFrom((uint8_t)_i2cAddr, want) != want) return false;
 
-        /* discard the repeated header */
-        for (uint8_t i = 0; i < 4; i++) (void)_i2c->read();
+        uint16_t hlen = 0;
+        for (uint8_t attempt = 0; attempt < 10; attempt++) {
+            if (_i2c->requestFrom((uint8_t)_i2cAddr, want) != want) return false;
+            uint8_t hl = _i2c->read();
+            uint8_t hm = _i2c->read();
+            (void)_i2c->read();                 /* channel  */
+            (void)_i2c->read();                 /* sequence */
+            uint16_t hraw = ((uint16_t)hm << 8) | hl;
+            hlen = (hraw == 0xFFFF) ? 0 : (hraw & 0x7FFF);
+            if (hlen > 4) break;
+            while (_i2c->available()) (void)_i2c->read();   /* empty transfer */
+            hlen = 0;
+            delayMicroseconds(500);
+        }
+        if (hlen == 0) return false;            /* the hub resends it later as an orphan */
+        hlen -= 4;
+        if (hlen < remaining) remaining = hlen; /* never read past the real cargo */
+        uint16_t valid = (chunk < remaining) ? chunk : remaining;
 
         for (uint16_t i = 0; i < chunk; i++) {
             uint8_t b = _i2c->read();
-            if (idx < MASSMORE_BNO08X_MAX_PACKET) _rxBuf[idx++] = b;
+            if (i < valid && idx < MASSMORE_BNO08X_MAX_PACKET) _rxBuf[idx++] = b;
         }
-        remaining -= chunk;
+        remaining -= valid;
     }
 
+    if (orphan) return false;
     _rxLen = idx;
     return true;
 }
@@ -709,7 +747,11 @@ const uint8_t *Massmore_BNO08x::getRawPacket(uint16_t &len, uint8_t &channel) co
 
 bool Massmore_BNO08x::update() {
     if (_busType == MASSMORE_BNO08X_BUS_NONE) return false;
-    if (_intPin >= 0 && digitalRead(_intPin) == HIGH) return false;
+    /* INT gates I2C / SPI reads only. On UART the bytes are already sitting in
+     * the host's RX buffer, and H_INTN does not follow them (tested on BNO086:
+     * with INT connected no packet was ever read), so never gate UART on it. */
+    if (_busType != MASSMORE_BNO08X_BUS_UART &&
+        _intPin >= 0 && digitalRead(_intPin) == HIGH) return false;
     if (!receivePacket()) return false;
     /* Anchor for the report timestamps in this packet. Taken before parsing so
      * the value is as close as possible to the moment the bytes arrived. */
@@ -1167,9 +1209,15 @@ void Massmore_BNO08x::parseProductIdResponse() {
         _productIds[_productIdCount++] = p;
     }
 
-    /* Primary entry: the SH-2 application when we can recognise it, otherwise
-     * whichever response arrived first. */
-    if (isApp || !_productId.valid) _productId = p;
+    /* Primary entry: the FIRST recognised SH-2 application, otherwise whichever
+     * response arrived first. After a hardware reset the part announces more
+     * than one known image (10004563 v3.12.x then 10003606 v1.10.x on BNO086);
+     * keeping the first makes the reported version stable across resets. */
+    bool primaryIsApp = false;
+    for (uint8_t i = 0; _productId.valid && i < kKnownPartCount; i++) {
+        if (_productId.swPartNumber == kKnownPartNumbers[i]) { primaryIsApp = true; break; }
+    }
+    if (!_productId.valid || (isApp && !primaryIsApp)) _productId = p;
 
     dbgPrintf(PSTR("[massmore] SW %u.%u.%u part %lu build %lu\n"),
               _productId.swVersionMajor, _productId.swVersionMinor,
@@ -1336,7 +1384,7 @@ const char *Massmore_BNO08x::authToString(Massmore_BNO08x_auth_t a) {
 const char *Massmore_BNO08x::statusToString(Massmore_BNO08x_status_t s) {
     switch (s) {
     case MASSMORE_BNO08X_OK:               return MASSMORE_BNO08X_STR("OK");
-    case MASSMORE_BNO08X_ERR_IO:           return MASSMORE_BNO08X_STR("Bus I/O error");
+    case MASSMORE_BNO08X_ERR_IO:           return MASSMORE_BNO08X_STR("Bus I/O error (I2C held low? use RST pin or power-cycle)");
     case MASSMORE_BNO08X_ERR_TIMEOUT:      return MASSMORE_BNO08X_STR("Timeout");
     case MASSMORE_BNO08X_ERR_BAD_PARAM:    return MASSMORE_BNO08X_STR("Bad parameter");
     case MASSMORE_BNO08X_ERR_NO_DEVICE:    return MASSMORE_BNO08X_STR("No device found");
@@ -1940,10 +1988,21 @@ Massmore_BNO08x_status_t Massmore_BNO08x::readSensorMetadata(uint16_t metadataRe
  *   identity helpers (verifyChipID / getSerialNumber / isGenuine)
  * ========================================================================= */
 
-/* ตรวจว่ามีอุปกรณ์ ACK ที่ address นี้ (ใช้เฉพาะตอน begin) */
+/* ตรวจว่ามีอุปกรณ์ ACK ที่ address นี้ (ใช้เฉพาะตอน begin)
+ * BNO08x อาจ NACK ครั้งแรกขณะหลับหรือกำลังยุ่ง (เช่น host เพิ่ง reset ขณะชิปยัง
+ * stream report อยู่) จึงลองซ้ำหลายครั้งก่อนสรุปว่าไม่มีอุปกรณ์ */
 bool Massmore_BNO08x::i2cProbe(uint8_t address) {
-    _i2c->beginTransmission(address);
-    return _i2c->endTransmission() == 0;
+    _busHeld = false;
+    for (uint8_t attempt = 0; attempt < 10; attempt++) {
+        _i2c->beginTransmission(address);
+        uint8_t rc = _i2c->endTransmission();
+        if (rc == 0) return true;
+        /* 5 = timeout (Arduino-ESP32 / AVR Wire): SDA/SCL ถูกกดค้าง ไม่ใช่ NACK
+         * ลองซ้ำไม่ช่วย และแต่ละครั้งกินเวลาเท่า Wire timeout (~1 s บน ESP32) */
+        if (rc == 5) { _busHeld = true; return false; }
+        delay(10);
+    }
+    return false;
 }
 
 /* ถ้า sensor นี้ยังไม่ถูก enable ให้เปิดที่ SIMPLE_INTERVAL (50 Hz) */
@@ -1953,10 +2012,20 @@ bool Massmore_BNO08x::ensureEnabled(uint8_t sensorId) {
     return setFeature(sensorId, MASSMORE_BNO08X_SIMPLE_INTERVAL_US) == MASSMORE_BNO08X_OK;
 }
 
+/* Blocking API บน UART: ระหว่างที่ sketch delay() ชิป stream ต่อที่ 3 Mbit/s จน RX
+ * buffer ของ host ล้น (เจอบน ESP32: buffer 1024 / 4096 เต็มหลัง delay(100) แล้ว
+ * readAll() timeout ~50%) ข้อมูลเก่านั้นไม่มีใครต้องการเพราะ read*() ต้องการค่าใหม่
+ * จึงทิ้งก่อนรอ — ตัว parser หา 0x7E ของ frame ถัดไปเอง */
+void Massmore_BNO08x::discardStaleUart() {
+    if (_busType != MASSMORE_BNO08X_BUS_UART) return;
+    while (_uart->available() > 0) (void)_uart->read();
+}
+
 bool Massmore_BNO08x::waitForReport(uint8_t sensorId, uint32_t timeoutMs) {
     if (_busType == MASSMORE_BNO08X_BUS_NONE) { _lastError = MASSMORE_BNO08X_ERR_NOT_READY; return false; }
     if (!ensureEnabled(sensorId)) return false;
     hasNewReport(sensorId);                      /* ล้าง flag เก่าก่อนรอของใหม่ */
+    discardStaleUart();
 
     uint32_t t0 = millis();
     while ((uint32_t)(millis() - t0) < timeoutMs) {      /* rollover-safe */
@@ -1987,6 +2056,7 @@ bool Massmore_BNO08x::readAll(Massmore_BNO08x_reading_t &out, uint32_t timeoutMs
         if (!ensureEnabled(kIds[i])) return false;
         hasNewReport(kIds[i]);
     }
+    discardStaleUart();
 
     uint32_t t0  = millis();
     uint8_t  got = 0;
@@ -2044,6 +2114,38 @@ bool Massmore_BNO08x::verifyChipID() {
     default:
         _lastError = MASSMORE_BNO08X_ERR_WRONG_ID;
         return false;
+    }
+}
+
+Massmore_BNO08x_chip_t Massmore_BNO08x::getChipModel() const {
+    if (!_productId.valid) return MASSMORE_BNO08X_CHIP_UNKNOWN;
+
+    /* Firmware images only shipped on the BNO086 */
+    for (uint8_t e = 0; e < _productIdCount; e++) {
+        uint32_t pn = _productIds[e].swPartNumber;
+        if (pn == 10004563UL || pn == 10004095UL) return MASSMORE_BNO08X_CHIP_BNO086;
+    }
+
+    /* Otherwise decide by the report list the chip advertised: motion request,
+     * optical flow and dead reckoning (0x2B–0x2D) exist only on the BNO086. */
+    bool advertised = false;
+    for (uint8_t id = 0; id < 0x40; id++) {
+        if (_advertReportLen[id]) { advertised = true; break; }
+    }
+    if (!advertised) return MASSMORE_BNO08X_CHIP_UNKNOWN;
+    if (_advertReportLen[MASSMORE_BNO08X_SENSOR_MOTION_REQUEST] ||
+        _advertReportLen[MASSMORE_BNO08X_SENSOR_OPTICAL_FLOW] ||
+        _advertReportLen[MASSMORE_BNO08X_SENSOR_DEAD_RECKONING_POSE]) {
+        return MASSMORE_BNO08X_CHIP_BNO086;
+    }
+    return MASSMORE_BNO08X_CHIP_BNO085;
+}
+
+const char *Massmore_BNO08x::chipModelToString(Massmore_BNO08x_chip_t c) {
+    switch (c) {
+    case MASSMORE_BNO08X_CHIP_BNO085: return MASSMORE_BNO08X_STR("BNO085");
+    case MASSMORE_BNO08X_CHIP_BNO086: return MASSMORE_BNO08X_STR("BNO086");
+    default:                          return MASSMORE_BNO08X_STR("BNO08x");
     }
 }
 

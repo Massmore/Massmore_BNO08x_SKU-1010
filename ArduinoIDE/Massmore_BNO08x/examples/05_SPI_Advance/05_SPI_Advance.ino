@@ -16,11 +16,12 @@
     CS        ->  GPIO 5            GPIO 10     D10
     INT       ->  GPIO 4            GPIO 4      D2     (จำเป็น)
     RST       ->  GPIO 17           GPIO 5      D3     (จำเป็น)
-    P0 (WAKE) ->  GPIO 16           GPIO 6      D4     (หรือต่อ 3Vo แล้วตั้ง WAKE_PIN = -1)
+    P0 (WAKE) ->  GPIO 16           GPIO 6      D4     (จำเป็น — ห้ามต่อ 3Vo ตรง ๆ)
     P1        ->  3Vo
     BT        ->  ปล่อยลอย
 
-  หลัง reset ขา P0 เปลี่ยนหน้าที่เป็น WAKE (active-low) — driver จัดการให้เมื่อส่ง wakePin
+  driver ดึง P0 = HIGH ระหว่าง reset (ชิปจึงเข้าโหมด SPI) แล้วใช้เป็น WAKE (active-low) ต่อ
+  ชิปรับคำสั่งทาง SPI เฉพาะตอนถูกปลุก ถ้าต่อ P0 เข้า 3Vo ตรง ๆ จะส่งคำสั่งไม่ได้เลย
   หมายเหตุ: บนบอร์ด Halley V2 มีเฉพาะ SDA/SCL ที่ผ่าน level shifter; DI และ CS เป็น 3.3 V ล้วน
 
   Designed and Manufactured by Massmore — https://www.massmore.shop
@@ -75,7 +76,7 @@ void setup() {
   if (!imu.beginSPI(CS_PIN, INT_PIN, RST_PIN, WAKE_PIN, SPI, SPI_SPEED_HZ)) {
     Serial.print(F("BNO08x not found on SPI: "));
     Serial.println(Massmore_BNO08x::statusToString(imu.lastError()));
-    Serial.println(F("Check that P1 and P0 were both HIGH during reset."));
+    Serial.println(F("Check P1 = 3Vo, P0 = WAKE_PIN (not 3Vo), and INT / RST / CS wiring."));
     while (true) delay(100);
   }
 

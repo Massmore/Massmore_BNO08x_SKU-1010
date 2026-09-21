@@ -4,13 +4,15 @@
   ย้าย I2C ไปขาอื่นและใช้ bus ที่สอง (Wire1) บน ESP32 / ESP32-S3 ด้วย
   Arduino-ESP32 Core 3.x API — ไลบรารีไม่ hardcode ขาใด ๆ sketch เป็นผู้กำหนดทั้งหมด
 
-    ESP32 (Classic)  : Wire1 บน GPIO 25 (SDA) / GPIO 26 (SCL)   — GPIO Matrix ย้ายได้ทุกขา
-    ESP32-S3         : Wire1 บน GPIO 17 (SDA) / GPIO 18 (SCL)   — GPIO Matrix ย้ายได้ทุกขา
+    ESP32 (Classic)  : Wire1 บน GPIO 21 (SDA) / GPIO 22 (SCL)   — GPIO Matrix ย้ายได้ทุกขา
+    ESP32-S3 (MOMO)  : Wire1 บน GPIO 14 (SDA) / GPIO 15 (SCL)   — GPIO Matrix ย้ายได้ทุกขา
     Arduino Nano     : AVR มี hardware I2C ชุดเดียว ขาตายตัว A4 (SDA) / A5 (SCL)
                        จึงใช้ Wire ตามปกติ (ตัวอย่างนี้ compile ผ่านและทำงานได้เหมือน 01)
 
   Wiring — Halley V2: 3Vo→3V3, GND→GND, SDA→<SDA pin>, SCL→<SCL pin>
            INT→<INT pin> (แนะนำ) ทำให้ driver ไม่ต้อง poll bus เปล่า ๆ
+           RST→<RST pin> (แนะนำ) driver reset ชิปด้วยขานี้ตอน begin() — กู้ bus ที่ค้างได้
+    ESP32 (Classic) ตัวอย่างนี้: INT = GPIO 4, RST = GPIO 17
 
   Designed and Manufactured by Massmore — https://www.massmore.shop
 */
@@ -19,18 +21,21 @@
 #include <Massmore_BNO08x.h>
 
 // ---- กำหนดขาใน sketch เท่านั้น ----------------------------------------------------
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-  #define I2C_SDA_PIN  17
-  #define I2C_SCL_PIN  18
-  #define INT_PIN      4        // -1 = ไม่ต่อ
+#if defined(CONFIG_IDF_TARGET_ESP32S3)       // MOMO by Massmore (ESP32-S3 + CH343P)
+  #define I2C_SDA_PIN  14
+  #define I2C_SCL_PIN  15
+  #define INT_PIN      -1       // -1 = ไม่ต่อ (polling)
+  #define RST_PIN      -1
   TwoWire &imuBus = Wire1;      // bus ที่สองของ ESP32-S3
 #elif defined(ARDUINO_ARCH_ESP32)
-  #define I2C_SDA_PIN  25
-  #define I2C_SCL_PIN  26
+  #define I2C_SDA_PIN  21
+  #define I2C_SCL_PIN  22
   #define INT_PIN      4
+  #define RST_PIN      17       // -1 = ไม่ต่อ
   TwoWire &imuBus = Wire1;      // bus ที่สองของ ESP32 Classic
 #else
   #define INT_PIN      2        // Nano: INT ต่อ D2 (หรือ -1 ถ้าไม่ต่อ)
+  #define RST_PIN      -1
   TwoWire &imuBus = Wire;       // AVR: A4 / A5 เท่านั้น
 #endif
 #define I2C_ADDRESS   MASSMORE_BNO08X_I2C_ADDR_DEF
@@ -55,7 +60,7 @@ void setup() {
 #endif
 
   // ส่ง bus reference + INT pin เข้าไป — ไลบรารีไม่เรียก begin() ของ bus เอง
-  if (!imu.begin(I2C_ADDRESS, imuBus, INT_PIN)) {
+  if (!imu.begin(I2C_ADDRESS, imuBus, INT_PIN, RST_PIN)) {
     Serial.print(F("BNO08x not found: "));
     Serial.println(Massmore_BNO08x::statusToString(imu.lastError()));
     while (true) delay(100);

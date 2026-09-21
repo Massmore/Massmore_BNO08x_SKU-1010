@@ -26,9 +26,9 @@
  * Library identification
  * ========================================================================= */
 #define MASSMORE_BNO08X_VERSION_MAJOR 2
-#define MASSMORE_BNO08X_VERSION_MINOR 0
+#define MASSMORE_BNO08X_VERSION_MINOR 1
 #define MASSMORE_BNO08X_VERSION_PATCH 0
-#define MASSMORE_BNO08X_VERSION_STR   "2.0.0"
+#define MASSMORE_BNO08X_VERSION_STR   "2.1.0"
 
 /* ===========================================================================
  * I2C addresses — Datasheet [1] §1.2.3, Figure 1-12
@@ -312,6 +312,17 @@ typedef enum {
     MASSMORE_BNO08X_AUTH_NO_RESPONSE = 3, //!< no Product ID response — not a BNO08x, or wiring/address wrong
     MASSMORE_BNO08X_AUTH_BAD_RESPONSE= 4  //!< a response arrived but it is malformed
 } Massmore_BNO08x_auth_t;
+
+/*!
+ * รุ่นชิปที่ระบุได้จากชิปเอง (getChipModel) — BNO085 / BNO086 ใช้ package และ
+ * protocol เดียวกัน จึงแยกจาก firmware part number และ report ที่ชิปประกาศใน
+ * SHTP advertisement (0x2B–0x2D มีเฉพาะ BNO086)
+ */
+typedef enum {
+    MASSMORE_BNO08X_CHIP_UNKNOWN = 0, //!< ตอบเป็น BNO08x แต่แยกรุ่นไม่ได้
+    MASSMORE_BNO08X_CHIP_BNO085  = 1,
+    MASSMORE_BNO08X_CHIP_BNO086  = 2
+} Massmore_BNO08x_chip_t;
 
 /* ===========================================================================
  * Sensor data containers
