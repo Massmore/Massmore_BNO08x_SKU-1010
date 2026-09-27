@@ -1,7 +1,7 @@
 # Massmore_BNO08x
 
 **Massmore Halley V2 — BNO085 / BNO086 9-DOF AR/VR IMU Sensor Module (SKU-1010)**
-Arduino IDE / PlatformIO driver library — **Version 2.1.0** by Massmore — *Designed and Manufactured by Massmore*
+Arduino IDE / PlatformIO driver library — **Version 2.1.1** by Massmore — *Designed and Manufactured by Massmore*
 
 ![Massmore Halley V2 BNO085/BNO086](docs/images/halley-v2-product-cover.png)
 
@@ -37,12 +37,23 @@ quaternion / rotation vector ออกมา host MCU จึงไม่ต้�
 - Calibration, tare, Save DCD, FRS read/write, sleep / wake, soft / hardware reset
 - Factory Test sketch + pre-compiled firmware สำหรับ Massmore Web Serial Monitor
 
+### What's new in v2.1.1 (2026-09-27)
+
+ทดสอบ I2C บนบอร์ดจริง (BNO086 + ESP32-S3 MOMO) เพิ่มอีก 4 ตัวอย่าง — โค้ดไลบรารีไม่เปลี่ยน แก้เฉพาะตัวอย่างและเอกสาร
+
+- **Fix ตัวอย่าง 04:** เดิมเปิด Rotation Vector, magnetometer และ Game Rotation Vector พร้อมกัน ทั้ง RV และ Game RV เขียน quaternion ตัวเดียวกันในไลบรารี ค่า Euler ที่พิมพ์จึงสลับไปมาระหว่าง fusion 9 แกนกับ 6 แกน — ตัด Game RV ออก
+- **ตัวอย่าง 04 ใช้ง่ายขึ้น:** บรรทัดสถานะบอกสิ่งที่ต้องทำต่อเอง (`press 'c' to start` → `MOVE THE BOARD` → `READY - press 's' to save` → `'z'/'a' to set zero`) และพิมพ์ท่าขยับบอร์ดตอนบูต
+- **ตัวอย่าง 04:** ระบุ `TARE_BASIS_ROTATION_VECTOR` ให้ชัด — `tareNow()` ต้องใช้ basis ตรงกับ report ที่เปิดไว้ ถ้าใช้ Game RV ต้องส่ง `TARE_BASIS_GAMING_RV` และ tare เฉพาะแกน Z จะไม่มีผล (ทดสอบบน BNO086 fw 3.12.6)
+- **ทุกตัวอย่าง:** เพิ่มบรรทัดคอมเมนต์แนะนำ `RST_PIN 18` สำหรับ ESP32-S3 (MOMO) — เปิดคอมเมนต์เมื่อต่อสาย RST แล้ว driver จะ reset ชิปให้ตอน `begin()` กันอาการ SDA ค้างหลัง upload firmware ทับขณะชิปกำลังส่ง report (ทดสอบ reset กลางสตรีม 100 Hz 5/5 ครั้ง ไม่ค้าง)
+- **`PlatformIO/src/main.cpp`:** เปลี่ยนเป็นตัววัดมุม Euler ด้วย Game Rotation Vector — ไม่ต้อง calibrate เลย เหมาะกับงานวัดมุม พร้อมคำสั่งตั้งศูนย์ `z` / `a` / `r`
+- **เอกสาร:** `clearTare()` เป็นวิธียกเลิก tare — `softReset()` ไม่ล้าง tare (ทดสอบแล้ว)
+
 ### What's new in v2.1.0 (2026-09-22)
 
 ทดสอบกับบอร์ดจริง (BNO086) ครบทั้ง 4 โหมดบน ESP32 และ I2C บน ESP32-S3 (MOMO) — ผลอยู่ใน [`docs/Report_v2.1.0_Test_and_Manual_Plan.md`](docs/Report_v2.1.0_Test_and_Manual_Plan.md)
 
 - **ใหม่:** `getChipModel()` / `chipModelToString()` ระบุ BNO085 / BNO086 — Factory Test พิมพ์ `#CHIP BNO086`
-- **ใหม่:** ตัวอย่าง `07_UART_Mode` (SHTP-over-UART 3 Mbit/s) · Factory Test ย้ายเป็น `08_Factory_Test`
+- **ใหม่:** ตัวอย่าง `05_I2C_Euler_Compass` (Euler + เข็มทิศ tilt-compensated) และ `08_UART_Mode` (SHTP-over-UART 3 Mbit/s) · Factory Test ย้ายเป็น `09_Factory_Test`
 - **Fix I2C:** ค่ามุมเพี้ยนเป็นครั้งคราว (quaternion real ≈ 0) เมื่อ packet ยาวกว่าหนึ่ง chunk แล้วชิปตอบ header ว่าง
 - **Fix I2C:** `begin()` ลอง probe ซ้ำเมื่อชิป NACK ครั้งแรก · ตรวจ bus ค้าง (SDA/SCL LOW) แล้วแจ้ง `Bus I/O error` ทันทีแทนการค้าง ~20 s
 - **Fix:** FW version ที่รายงานคงที่ทุก reset (เลือก firmware image ที่รู้จักตัวแรก)
@@ -94,15 +105,15 @@ quaternion / rotation vector ออกมา host MCU จึงไม่ต้�
 | **ESP32 (Classic)** | Arduino-ESP32 v3.x+ (Arduino IDE Core 3.3.12 / pioarduino 55.03.311 = Core 3.3.11) | Full GPIO Matrix | None. **Primary Factory Test target.** |
 | **AVR — Arduino Nano (ATmega328P)** | Arduino AVR Core | Fixed Hardware Pins (I2C: A4/A5, SPI: D10–13, UART: D0/D1) | 2 KB SRAM / 32 KB Flash — driver ใช้ SRAM ~1 KB (packet buffer ลดเหลือ 128 byte อัตโนมัติ) ใช้ Simple API, หลีกเลี่ยง buffer ใหญ่ใน sketch. 5 V logic — ต่อได้เฉพาะ `SDA`/`SCL` (มี level shifter); ขา `INT`/`RST`/`DI`/`CS`/`P0`/`P1` ต้องผ่าน level shifter. |
 
-**Hardware-tested (2026-09-22, BNO086 FW 3.12.6, Arduino-ESP32 2.0.17 ผ่าน Arduino IDE):**
+**Hardware-tested** (BNO086 FW 3.12.6 part 10004563) — ESP32 DevKit: 2026-09-22 ผ่าน Arduino IDE (Arduino-ESP32 2.0.17) · ESP32-S3 MOMO: 2026-09-27 ผ่าน PlatformIO (pioarduino 55.03.311 = Core 3.3.11)
 
 | MCU | I2C | SPI | UART-SHTP | UART-RVC |
 |---|---|---|---|---|
 | ESP32 DevKit | PASS (01–04, 08) | PASS ~400 Hz | PASS | PASS |
-| ESP32-S3 MOMO | PASS (01, 08) | — | — | — |
+| ESP32-S3 MOMO | PASS (01, 03, 04, 05, 09) | — | — | — |
 | Arduino Nano | compile only | compile only | ไม่รองรับ (3 Mbaud) | compile only |
 
-Compile matrix (v2.1.0): 8 ตัวอย่าง × 3 บอร์ด ผ่านทั้ง **Arduino IDE (ESP32 Core 3.3.12, AVR 1.8.8)** และ **PlatformIO (`esp32dev`, `esp32-s3-devkitc-1`, `nano`)** — 48/48 build, ไม่มี warning จากไลบรารี (`-Wall -Wextra`)
+Compile matrix (v2.1.1): 9 ตัวอย่าง × 3 บอร์ด — **PlatformIO (`esp32dev`, `esp32-s3-devkitc-1`, `nano`) 27/27 build ไม่มี warning** (`-Wall -Wextra`) · Arduino IDE ใช้ไลบรารีและตัวอย่างชุดเดียวกัน (ESP32 Core 3.3.12, AVR 1.8.8)
 คอร์อื่น (RP2040, STM32) ไม่มี platform-specific code จึงน่าจะ compile ได้ แต่ **ไม่ได้ทดสอบและไม่รับประกัน**
 
 ---
@@ -265,11 +276,12 @@ imu.begin(0x4A, Wire, /*INT*/ 2);   // INT ผ่าน level shifter (Nano เ�
 | 01 | `01_BasicRead` | Simple Blocking API — `readAll()` พิมพ์ทุกค่า (I2C default) |
 | 02 | `02_CustomPins_BusRemap` | ESP32 / S3: `Wire1` บนขาที่เลือกเอง (Core 3.x) · Nano: A4/A5 fixed |
 | 03 | `03_NonBlocking_Multitask` | FSM API + LED blink + loop counter — แสดงว่า `loop()` ไม่ถูก block |
-| 04 | `04_Calibration_Tare` | calibration ตามขั้นตอน CEVA, Save DCD, tare / persist / clear |
-| 05 | `05_SPI_Advance` | SPI Mode 3 @ 3 MHz, Rotation Vector 400 Hz + วัดอัตราจริง |
-| 06 | `06_UART_RVC` | โหมด UART-RVC 100 Hz แบบสายเส้นเดียว (`Massmore_BNO08x_RVC`) |
-| 07 | `07_UART_Mode` | SHTP-over-UART 3 Mbit/s (`beginUART()`) — API เต็มเหมือน I2C · ESP32 / S3 เท่านั้น |
-| 08 | `08_Factory_Test` | **Outgoing QA** — bus scan, Product ID, serial, authenticity, range check, continuous read → `#VERDICT` |
+| 04 | `04_Calibration_Tare` | calibration ตามขั้นตอน CEVA พร้อมคำแนะนำ step-by-step บน Serial (MOVE THE BOARD → READY → save), Save DCD, tare / persist / clear |
+| 05 | `05_I2C_Euler_Compass` | **ใหม่** — Euler angles (roll / pitch / yaw) + เข็มทิศ tilt-compensated 0..360° / 16 ทิศ + ความแม่นยำ heading (I2C) |
+| 06 | `06_SPI_Advance` | SPI Mode 3 @ 3 MHz, Rotation Vector 400 Hz + วัดอัตราจริง |
+| 07 | `07_UART_RVC` | โหมด UART-RVC 100 Hz แบบสายเส้นเดียว (`Massmore_BNO08x_RVC`) |
+| 08 | `08_UART_Mode` | SHTP-over-UART 3 Mbit/s (`beginUART()`) — API เต็มเหมือน I2C · ESP32 / S3 เท่านั้น |
+| 09 | `09_Factory_Test` | **Outgoing QA** — bus scan, Product ID, serial, authenticity, range check, continuous read → `#VERDICT` |
 
 ทุกตัวอย่างไม่มี dependency ภายนอก และ build ผ่านทั้ง `esp32dev`, `esp32-s3-devkitc-1`, `nano`
 
@@ -277,7 +289,7 @@ imu.begin(0x4A, Wire, /*INT*/ 2);   // INT ผ่าน level shifter (Nano เ�
 
 ## 9. Factory Test & Web Serial Monitor
 
-`08_Factory_Test` รันเองหลังบูตและพิมพ์ผลแบบ machine-parsable ที่ 115200:
+`09_Factory_Test` รันเองหลังบูตและพิมพ์ผลแบบ machine-parsable ที่ 115200:
 
 ```text
 #MASSMORE_FACTORY_TEST v1.0

@@ -31,6 +31,9 @@
 #if defined(CONFIG_IDF_TARGET_ESP32S3)       // MOMO by Massmore (ESP32-S3 + CH343P)
   #define I2C_SDA_PIN  14
   #define I2C_SCL_PIN  15
+  // #define RST_PIN      18    // แนะนำ: ต่อ RST เข้า GPIO 18 แล้วเปิดคอมเมนต์บรรทัดนี้
+                              // driver จะ reset ชิปให้ตอน begin() — กันอาการ I2C ค้าง
+                              // เมื่อ upload firmware ใหม่ทับขณะชิปกำลังส่ง report
 #elif defined(ARDUINO_ARCH_ESP32)
   #define I2C_SDA_PIN  21
   #define I2C_SCL_PIN  22

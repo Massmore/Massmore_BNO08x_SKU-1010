@@ -27,8 +27,8 @@
  * ========================================================================= */
 #define MASSMORE_BNO08X_VERSION_MAJOR 2
 #define MASSMORE_BNO08X_VERSION_MINOR 1
-#define MASSMORE_BNO08X_VERSION_PATCH 0
-#define MASSMORE_BNO08X_VERSION_STR   "2.1.0"
+#define MASSMORE_BNO08X_VERSION_PATCH 1
+#define MASSMORE_BNO08X_VERSION_STR   "2.1.1"
 
 /* ===========================================================================
  * I2C addresses — Datasheet [1] §1.2.3, Figure 1-12

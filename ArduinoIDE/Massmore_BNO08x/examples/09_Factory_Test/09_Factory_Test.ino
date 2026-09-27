@@ -1,5 +1,5 @@
 /*
-  08_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
+  09_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
   ---------------------------------------------------------------------------
   ใช้ตรวจบอร์ด Massmore BNO08x SKU-1010 ก่อนส่งลูกค้า และให้เว็บ
   Massmore Web Serial Monitor อ่านผลอัตโนมัติ — รันเองทันทีหลังบูต
@@ -47,7 +47,10 @@
   #define FT_SDA_PIN   14
   #define FT_SCL_PIN   15
   #define FT_INT_PIN   (-1)
-  #define FT_RST_PIN   (-1)
+  #define FT_RST_PIN   (-1)   // ไม่ต่อ RST
+  // #define FT_RST_PIN   18  // แนะนำ: ต่อ RST เข้า GPIO 18 แล้วเปิดคอมเมนต์บรรทัดนี้
+                              // driver จะ reset ชิปให้ตอน begin() — กันอาการ I2C ค้าง
+                              // เมื่อ upload firmware ใหม่ทับขณะชิปกำลังส่ง report
   #define FT_MCU_NAME  "ESP32-S3"
 #elif defined(ARDUINO_ARCH_ESP32)
   #define FT_SDA_PIN   21
@@ -273,7 +276,7 @@ void setup() {
 #endif
   Wire.setClock(FT_I2C_HZ);
 
-  Serial.println(F("\nMassmore_BNO08x - 08_Factory_Test (keep the board still)"));
+  Serial.println(F("\nMassmore_BNO08x - 09_Factory_Test (keep the board still)"));
   runFactoryTest();
 }
 

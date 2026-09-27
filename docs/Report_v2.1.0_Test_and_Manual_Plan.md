@@ -1,10 +1,10 @@
-# Massmore_BNO08x v2.1.0 — Hardware Test Report & User Manual Plan
+# Massmore_BNO08x v2.1.0 / v2.1.1 — Hardware Test Report & User Manual Plan
 
 | รายการ | ค่า |
 |---|---|
 | ผลิตภัณฑ์ | Massmore Halley V2 — BNO085 / BNO086 9-DOF IMU (SKU-1010) |
-| ไลบรารี | `Massmore_BNO08x` **v2.1.0** by Massmore |
-| ช่วงทดสอบ | 2026-09-21 ถึง 2026-09-22 |
+| ไลบรารี | `Massmore_BNO08x` **v2.1.0** (รอบแรก) และ **v2.1.1** (หัวข้อ 12) by Massmore |
+| ช่วงทดสอบ | 2026-09-21 ถึง 2026-09-22 (v2.1.0) · 2026-09-27 (v2.1.1 — หัวข้อ 12) |
 | ชิปที่ใช้ทดสอบ | **BNO086** — SH-2 part `10004563`, FW `3.12.6` build `62` |
 | วัตถุประสงค์ | (1) ทดสอบไลบรารีกับฮาร์ดแวร์จริงทุกโหมด (2) แก้ bug ที่พบ (3) เป็นวัตถุดิบสำหรับเขียนคู่มือผู้ใช้ฉบับละเอียด |
 
@@ -26,6 +26,7 @@
 9. [สิ่งที่ยังไม่ได้ทดสอบ / ข้อจำกัด](#9-สิ่งที่ยังไม่ได้ทดสอบ--ข้อจำกัด)
 10. [Plan to User Manual — โครงคู่มือที่เสนอ](#10-plan-to-user-manual--โครงคู่มือที่เสนอ)
 11. [ภาคผนวก](#11-ภาคผนวก)
+12. [รอบทดสอบเพิ่มเติม 2026-09-27 (v2.1.1)](#12-รอบทดสอบเพิ่มเติม-2026-09-27-v211)
 
 ---
 
@@ -36,12 +37,12 @@
 | MCU | โหมด | PS1 / PS0 | ตัวอย่าง | ผล | ตัวเลขสำคัญ |
 |---|---|---|---|---|---|
 | ESP32 DevKit | I2C | LOW / LOW | 01, 02, 03, 04 | **PASS** | RV 100 Hz (03), loop ≈ 36,000 รอบ/s |
-| ESP32 DevKit | I2C | LOW / LOW | 08_Factory_Test | **PASS** | `#VERDICT PASS`, `#CHIP BNO086` |
-| ESP32 DevKit | SPI | HIGH / HIGH | 05_SPI_Advance | **PASS** | RV 395–400 Hz (ตั้ง 400 Hz) |
-| ESP32 DevKit | UART-SHTP 3 Mbaud | HIGH / LOW | 07_UART_Mode | **PASS** | 469 / 469 ครั้งใน 60 s, error 0 |
-| ESP32 DevKit | UART-RVC 115200 | LOW / HIGH | 06_UART_RVC | **PASS** | 30 s ไม่มี frame หาย, checksum error 0 |
+| ESP32 DevKit | I2C | LOW / LOW | 09_Factory_Test | **PASS** | `#VERDICT PASS`, `#CHIP BNO086` |
+| ESP32 DevKit | SPI | HIGH / HIGH | 06_SPI_Advance | **PASS** | RV 395–400 Hz (ตั้ง 400 Hz) |
+| ESP32 DevKit | UART-SHTP 3 Mbaud | HIGH / LOW | 08_UART_Mode | **PASS** | 469 / 469 ครั้งใน 60 s, error 0 |
+| ESP32 DevKit | UART-RVC 115200 | LOW / HIGH | 07_UART_RVC | **PASS** | 30 s ไม่มี frame หาย, checksum error 0 |
 | ESP32-S3 MOMO | I2C | LOW / LOW | 01, 08 | **PASS** | 600 / 600 sample ไม่มีค่าเพี้ยน |
-| ทุก MCU | — | — | 8 ตัวอย่าง × 3 บอร์ด | **Compile PASS** | Arduino IDE (ESP32 Core 3.3.12) 24/24 + PlatformIO (Core 3.3.11) 24/24, warning จากไลบรารี = 0 |
+| ทุก MCU | — | — | 8 ตัวอย่าง × 3 บอร์ด (ชุดก่อนเพิ่ม `05_I2C_Euler_Compass`) | **Compile PASS** | Arduino IDE (ESP32 Core 3.3.12) 24/24 + PlatformIO (Core 3.3.11) 24/24, warning จากไลบรารี = 0 |
 
 ### 1.2 Bug ที่พบและแก้ในรอบนี้ (รายละเอียดหัวข้อ 7)
 
@@ -127,7 +128,7 @@
 
 1. ถอดไฟเซ็นเซอร์ หรือเตรียมขา RST ต่อกับ MCU
 2. ต่อ `P0` / `P1` ตามตาราง
-3. **reset ชิป** — ต่อ RST แล้วตัวอย่างจะ reset ให้เองตอน `begin()` (ตัวอย่าง 01–07 ทำให้แล้ว) หรือถอดไฟเซ็นเซอร์แล้วเสียบใหม่
+3. **reset ชิป** — ต่อ RST แล้วตัวอย่างจะ reset ให้เองตอน `begin()` (ทุกตัวอย่างทำให้แล้วเมื่อตั้งค่าขา RST) หรือถอดไฟเซ็นเซอร์แล้วเสียบใหม่
 4. อัปโหลดตัวอย่างของโหมดนั้น
 
 > กด reset ที่ MCU **ไม่ได้** reset เซ็นเซอร์ — ชิปจะยังอยู่ในโหมดเดิม
@@ -140,7 +141,7 @@
 
 1. Arduino IDE → **Sketch → Include Library → Add .ZIP Library…**
 2. เลือก `ArduinoIDE/Massmore_BNO08x.zip`
-3. ตรวจ: **File → Examples → Massmore_BNO08x** ต้องเห็น 8 ตัวอย่าง `01_BasicRead` … `08_Factory_Test`
+3. ตรวจ: **File → Examples → Massmore_BNO08x** ต้องเห็น 9 ตัวอย่าง `01_BasicRead` … `09_Factory_Test`
 4. ถ้าเคยติดตั้ง v2.0.0 ไว้ ให้ลบโฟลเดอร์ `Documents/Arduino/libraries/Massmore_BNO08x` เดิมก่อน
 
 ### 4.2 Board settings ที่ใช้ทดสอบ
@@ -159,7 +160,7 @@
 
 ## 5. ขั้นตอนทดสอบแต่ละโหมด (Step by Step + ผลจริง)
 
-### 5.1 I2C บน ESP32-S3 (MOMO) — ตัวอย่าง 01 และ 08
+### 5.1 I2C บน ESP32-S3 (MOMO) — ตัวอย่าง 01 และ 09
 
 **Wiring**
 
@@ -193,7 +194,7 @@ heading=50.8  roll=-4.5  pitch=0.8  yaw=50.8  | accel=-0.14 -0.79 9.68  gyro=0.0
 
 **ปัญหาที่พบในขั้นนี้:** รอบแรก SDA/SCL อ่านได้ LOW ค้าง → `No device found` แก้โดยถอดไฟเซ็นเซอร์เสียบใหม่ (สาเหตุ: หัวข้อ 7, B3)
 
-**ผลจริง (08_Factory_Test บน MOMO)**
+**ผลจริง (09_Factory_Test บน MOMO)**
 
 ```text
 #MASSMORE_FACTORY_TEST v1.0
@@ -287,11 +288,11 @@ roll=0.0 pitch=0.0 yaw=0.0 | mag acc: Unreliable  RV acc: Unreliable  heading er
 ```
 คำสั่ง (พิมพ์ใน Serial Monitor ทีละตัวอักษร): `c` calibrate ทั้งหมด, `m` เฉพาะ mag, `e` ปิด, `s` Save DCD, `x` ลบ calibration, `?` สถานะ, `z` tare heading, `a` tare ทุกแกน, `p` persist tare, `t` clear tare, `h` help
 
-**ทดสอบความทนทาน:** อัปโหลดตัวอย่าง 04 → 01 → 03 → 02 → 08 ทับกันขณะชิปกำลังส่งข้อมูล 2 รอบ — **ขึ้นทุกครั้ง** (ก่อนแก้ B3 ตัวอย่าง 04 ค้างทุกครั้ง)
+**ทดสอบความทนทาน:** อัปโหลดตัวอย่าง 04 → 01 → 03 → 02 → 09 ทับกันขณะชิปกำลังส่งข้อมูล 2 รอบ — **ขึ้นทุกครั้ง** (ก่อนแก้ B3 ตัวอย่าง 04 ค้างทุกครั้ง)
 
 ---
 
-### 5.3 SPI บน ESP32 DevKit — ตัวอย่าง 05
+### 5.3 SPI บน ESP32 DevKit — ตัวอย่าง 06
 
 **Wiring**
 
@@ -311,13 +312,13 @@ roll=0.0 pitch=0.0 yaw=0.0 | mag acc: Unreliable  RV acc: Unreliable  heading er
 **Step by step**
 
 1. ต่อสายตามตาราง — จุดที่พลาดบ่อยคือ `P0`: ต้องต่อเข้า GPIO 16 ไม่ใช่ 3V3
-2. เปิด `05_SPI_Advance` → Upload → Serial Monitor 115200
+2. เปิด `06_SPI_Advance` → Upload → Serial Monitor 115200
 3. driver ดึง GPIO 16 = HIGH ระหว่าง reset (ชิปจึงเข้าโหมด SPI) แล้วใช้ขาเดียวกันเป็น WAKE ต่อ
 
 **ผลจริง**
 
 ```text
-Massmore_BNO08x - 05_SPI_Advance
+Massmore_BNO08x - 06_SPI_Advance
 Connected. Firmware 3.12.6  part 10004563
 rpy -1.1 1.9 -0.0  gyro(dps) 0.0 0.0 0.0
 [rate] Rotation Vector = 130 Hz               <- วินาทีแรกไม่เต็ม — ปกติ
@@ -332,7 +333,7 @@ rpy -1.1 1.9 -0.0  gyro(dps) 0.0 0.0 0.0
 
 ---
 
-### 5.4 UART-SHTP 3 Mbaud บน ESP32 DevKit — ตัวอย่าง 07 (ใหม่)
+### 5.4 UART-SHTP 3 Mbaud บน ESP32 DevKit — ตัวอย่าง 08 (ใหม่ใน v2.1.0)
 
 **Wiring**
 
@@ -357,7 +358,7 @@ rpy -1.1 1.9 -0.0  gyro(dps) 0.0 0.0 0.0
 **ผลจริง**
 
 ```text
-Massmore_BNO08x - 07_UART_Mode
+Massmore_BNO08x - 08_UART_Mode
 UART OK - BNO086  FW 3.12.6  part 10004563
 heading=360.0  roll=-1.1  pitch=1.3  | accel=-0.20 -0.17 9.63  gyro=-0.00 0.00 0.00  mag=42.2 2.6 -31.9  [RV acc: Unreliable]
 heading=360.0  roll=-1.1  pitch=1.3  | accel=-0.20 -0.18 9.63  gyro=0.00 0.00 0.00  mag=43.3 2.6 -31.9  [RV acc: Unreliable]
@@ -369,7 +370,7 @@ heading=360.0  roll=-1.1  pitch=1.3  | accel=-0.20 -0.18 9.63  gyro=0.00 0.00 0.
 
 ---
 
-### 5.5 UART-RVC 115200 บน ESP32 DevKit — ตัวอย่าง 06
+### 5.5 UART-RVC 115200 บน ESP32 DevKit — ตัวอย่าง 07
 
 **Wiring**
 
@@ -386,13 +387,13 @@ heading=360.0  roll=-1.1  pitch=1.3  | accel=-0.20 -0.18 9.63  gyro=0.00 0.00 0.
 **Step by step**
 
 1. สลับ `P0` เป็น HIGH, `P1` เป็น LOW
-2. เปิด `06_UART_RVC` → Upload → Serial Monitor 115200
+2. เปิด `07_UART_RVC` → Upload → Serial Monitor 115200
 3. ตัวอย่างจะ pulse RST (GPIO 17) หนึ่งครั้ง → ชิปเริ่ม stream 100 Hz เองโดยไม่ต้องส่งคำสั่ง
 
 **ผลจริง**
 
 ```text
-Massmore_BNO08x - 06_UART_RVC
+Massmore_BNO08x - 07_UART_RVC
 yaw	pitch	roll	ax	ay	az
 0.00	-0.93	1.53	-0.24	-0.16	9.68
 0.00	-0.92	1.52	-0.22	-0.14	9.65
@@ -422,7 +423,7 @@ esptool.py --chip esp32 --port /dev/cu.usbserial-130 --baud 460800 \
 ผลจริงหลัง flash ไฟล์ merged:
 
 ```text
-Massmore_BNO08x - 08_Factory_Test (keep the board still)
+Massmore_BNO08x - 09_Factory_Test (keep the board still)
 
 #MASSMORE_FACTORY_TEST v1.0
 #PRODUCT Massmore_BNO08x
@@ -511,7 +512,7 @@ Type 'r' + Enter to run the test again.
 
 ### B6 — UART-SHTP: `readAll()` timeout เมื่อมี `delay()`
 
-- **อาการ:** ตัวอย่าง 07 รอบแรก 25 สำเร็จ / 47 `read failed: Timeout`
+- **อาการ:** ตัวอย่าง 08 (UART-SHTP) รอบแรก 25 สำเร็จ / 47 `read failed: Timeout`
 - **หลักฐาน:** ก่อนเรียก `readAll()` RX buffer มีข้อมูลค้าง 1019–1024 byte (เต็ม); ขยาย buffer เป็น 4096 ก็ยังเต็มและยัง fail ~50%
 - **สาเหตุ:** ระหว่าง `delay(100)` ชิป stream ต่อจน buffer ล้น → frame ขาด → parser ตามไม่ทัน
 - **แก้:** Blocking API (`readAll`, `readEulerDeg`, `readHeadingDeg`) ทิ้งข้อมูลเก่าใน RX buffer ก่อนรอค่าใหม่ → 469 / 469
@@ -524,7 +525,7 @@ Type 'r' + Enter to run the test again.
   - รอ 1 s → ชิปไม่ยก INT เองเลยเมื่อว่าง
   - ส่งคำสั่งตอน INT = LOW → ได้ Product ID (`F8`) กลับมา
 - **สาเหตุ:** SPI ชิปรับคำสั่งเฉพาะตอนถูกปลุกด้วย WAKE (`P0` = LOW) — ต่อ 3V3 ตรง ๆ จึงปลุกไม่ได้
-- **แก้:** แก้คอมเมนต์ตัวอย่าง 05, `beginSPI()` คืน `ERR_BAD_PARAM` ทันทีถ้าไม่ได้ส่ง `wakePin` → ต่อ `P0` เข้า GPIO 16 แล้วได้ ~400 Hz
+- **แก้:** แก้คอมเมนต์ตัวอย่าง 06 (SPI), `beginSPI()` คืน `ERR_BAD_PARAM` ทันทีถ้าไม่ได้ส่ง `wakePin` → ต่อ `P0` เข้า GPIO 16 แล้วได้ ~400 Hz
 
 ### B8 — UART-RVC: ตัวอย่างเดิมไม่ตรงกับการต่อสาย
 
@@ -576,8 +577,8 @@ Serial.println(Massmore_BNO08x::chipModelToString(imu.getChipModel()));   // BNO
 | 03 | ESP32: INT 4, RST 17 · S3: 14/15, INT -1 |
 | 05 | P0 = WAKE จำเป็น (ลบคำแนะนำ "ต่อ 3Vo") |
 | 06 | ESP32 RX 21 / TX 22, S3 14/15, pulse RST ตอนเริ่ม, ตาราง PS0/PS1 ชัดเจน |
-| **07_UART_Mode** | **ใหม่** — SHTP-over-UART 3 Mbaud |
-| **08_Factory_Test** | ย้ายจาก 07 · พิมพ์ `#CHIP` + รายการ Product ID ทั้งหมด · S3 ใช้ 14/15 |
+| **08_UART_Mode** | **ใหม่** — SHTP-over-UART 3 Mbaud |
+| **09_Factory_Test** | ย้ายจาก 07 → 08 → 09 · พิมพ์ `#CHIP` + รายการ Product ID ทั้งหมด · S3 ใช้ 14/15 |
 
 ### 8.4 ไฟล์ในโปรเจกต์
 
@@ -585,7 +586,7 @@ Serial.println(Massmore_BNO08x::chipModelToString(imu.getChipModel()));   // BNO
 |---|---|
 | `ArduinoIDE/Massmore_BNO08x.zip` | build ใหม่ v2.1.0 (26 ไฟล์) |
 | `PlatformIO/lib/Massmore_BNO08x/` | sync ตรงกับ ArduinoIDE ทุกไฟล์ · `library.json` 2.1.0 |
-| `PlatformIO/src/main.cpp` | = 08_Factory_Test |
+| `PlatformIO/src/main.cpp` | ตัววัดมุม Euler (Game RV) ตั้งแต่ v2.1.1 — ก่อนหน้านี้ = 09_Factory_Test |
 | `firmware/bin/*.bin` | build ใหม่ v2.1.0 (arduino-cli + esptool merge) |
 | `firmware/manifest.json` | version 2.1.0 |
 | `firmware/README.md` | ผลจริง, วิธี build ด้วย arduino-cli |
@@ -626,7 +627,7 @@ Serial.println(Massmore_BNO08x::chipModelToString(imu.getChipModel()));   // BNO
 
 ### บทที่ 3 — ติดตั้งซอฟต์แวร์
 - Arduino IDE: ติดตั้ง ESP32 board package, Add .ZIP Library, เปิด Examples (หัวข้อ 4)
-- ภาพหน้าจอที่ต้องมี: Boards Manager, Add .ZIP, เมนู Examples ที่เห็น 8 ตัวอย่าง, เมนู Tools ของ ESP32 (Upload Speed 460800) และ S3 (USB CDC On Boot Disabled)
+- ภาพหน้าจอที่ต้องมี: Boards Manager, Add .ZIP, เมนู Examples ที่เห็น 9 ตัวอย่าง, เมนู Tools ของ ESP32 (Upload Speed 460800) และ S3 (USB CDC On Boot Disabled)
 - PlatformIO (ทางเลือก): เปิดโฟลเดอร์ `PlatformIO/`, เลือก env
 - วิธีอัปเดตจาก v2.0.0 (ลบโฟลเดอร์เก่า)
 
@@ -699,10 +700,10 @@ Serial.println(Massmore_BNO08x::chipModelToString(imu.getChipModel()));   // BNO
 | 02_CustomPins_BusRemap | Wire1 SDA 21, SCL 22, INT 4, RST 17 | Wire1 SDA 14, SCL 15 | A4, A5, INT D2 |
 | 03_NonBlocking_Multitask | SDA 21, SCL 22, INT 4, RST 17 | SDA 14, SCL 15 | A4, A5, INT D2 |
 | 04_Calibration_Tare | SDA 21, SCL 22, RST 17 | SDA 14, SCL 15 | A4, A5 |
-| 05_SPI_Advance | SCK 18, MISO 19, MOSI 23, CS 5, INT 4, RST 17, WAKE 16 | SCK 12, MISO 13, MOSI 11, CS 10, INT 4, RST 5, WAKE 6 | D13, D12, D11, CS D10, INT D2, RST D3, WAKE D4 |
-| 06_UART_RVC | RX 21 (TX 22 ไม่ใช้), RST 17 | RX 14 (TX 15 ไม่ใช้) | SoftwareSerial RX D2 |
-| 07_UART_Mode | RX 21, TX 22, INT 4, RST 17 | RX 14, TX 15 | ไม่รองรับ |
-| 08_Factory_Test | SDA 21, SCL 22 | SDA 14, SCL 15 | A4, A5 |
+| 06_SPI_Advance | SCK 18, MISO 19, MOSI 23, CS 5, INT 4, RST 17, WAKE 16 | SCK 12, MISO 13, MOSI 11, CS 10, INT 4, RST 5, WAKE 6 | D13, D12, D11, CS D10, INT D2, RST D3, WAKE D4 |
+| 07_UART_RVC | RX 21 (TX 22 ไม่ใช้), RST 17 | RX 14 (TX 15 ไม่ใช้) | SoftwareSerial RX D2 |
+| 08_UART_Mode | RX 21, TX 22, INT 4, RST 17 | RX 14, TX 15 | ไม่รองรับ |
+| 09_Factory_Test | SDA 21, SCL 22 | SDA 14, SCL 15 | A4, A5 |
 
 ### 11.2 ขนาดโปรแกรม (Flash) และผล compile
 
@@ -714,10 +715,10 @@ Arduino IDE (ESP32 Core **3.3.12**, AVR 1.8.8) และ PlatformIO (pioarduino 
 | 02_CustomPins_BusRemap | 308,552 (23%) | 339,822 (25%) | 19,638 (63%) | 322,964 | 355,842 | 19,638 |
 | 03_NonBlocking_Multitask | 308,536 (23%) | 339,806 (25%) | 19,948 (64%) | 323,052 | 355,962 | 19,948 |
 | 04_Calibration_Tare | 310,164 (23%) | 341,410 (26%) | 20,910 (68%) | 324,496 | 357,262 | 20,910 |
-| 05_SPI_Advance | 309,744 (23%) | 341,206 (26%) | 19,676 (64%) | 324,748 | 357,626 | 19,676 |
-| 06_UART_RVC | 297,108 (22%) | 305,293 (23%) | 6,818 (22%) | 311,220 | 319,721 | 5,858 |
-| 07_UART_Mode | 308,808 (23%) | 340,102 (25%) | 2,838 (9%) stub | 323,160 | 356,046 | 1,648 stub |
-| 08_Factory_Test | 313,068 (23%) | 343,910 (26%) | 24,836 (80%) | 326,952 | 359,570 | 24,836 |
+| 06_SPI_Advance | 309,744 (23%) | 341,206 (26%) | 19,676 (64%) | 324,748 | 357,626 | 19,676 |
+| 07_UART_RVC | 297,108 (22%) | 305,293 (23%) | 6,818 (22%) | 311,220 | 319,721 | 5,858 |
+| 08_UART_Mode | 308,808 (23%) | 340,102 (25%) | 2,838 (9%) stub | 323,160 | 356,046 | 1,648 stub |
+| 09_Factory_Test | 313,068 (23%) | 343,910 (26%) | 24,836 (80%) | 326,952 | 359,570 | 24,836 |
 
 หน่วย: byte · Nano ใน PIO ใช้ `-Wall` (ไม่ใส่ `-Wextra` เพราะ AVR core เองมี warning)
 
@@ -761,7 +762,7 @@ Massmore_BNO08x_SKU-1010/
 │       └── examples/ 01 … 08
 ├── PlatformIO/
 │   ├── platformio.ini
-│   ├── src/main.cpp                   ← = 08_Factory_Test
+│   ├── src/main.cpp                   ← ตัววัดมุม Euler (Game RV) ตั้งแต่ v2.1.1
 │   └── lib/Massmore_BNO08x/           ← สำเนาเดียวกับ ArduinoIDE + library.json
 ├── firmware/
 │   ├── README.md  manifest.json
@@ -771,6 +772,59 @@ Massmore_BNO08x_SKU-1010/
     ├── Article_BNO08x.md  BNO08x_User_Guide.docx/.pdf   ← เอกสารเก่า (API v1)
     └── images/
 ```
+
+---
+
+## 12. รอบทดสอบเพิ่มเติม 2026-09-27 (v2.1.1)
+
+ทดสอบ I2C บน **ESP32-S3 MOMO** ต่อจากรอบ v2.1.0 (ซึ่งบน MOMO ทดสอบไว้แค่ตัวอย่าง 01 และ 09)
+ชิปตัวเดิม: BNO086 part `10004563` FW `3.12.6` build `62` · SDA 14 / SCL 15 · 100 kHz
+build ผ่าน PlatformIO (pioarduino 55.03.311 = Core 3.3.11) ทั้งหมด
+
+### 12.1 ผลทดสอบ
+
+| ตัวอย่าง | ผล | ค่าที่วัดได้ |
+|---|---|---|
+| `09_Factory_Test` | **PASS** | `#VERDICT PASS` ครบ 11 ข้อ · `#CHIP BNO086` · \|a\| noise 0.040 m/s² |
+| `01_BasicRead` | **PASS** | `roll=-1.32 pitch=-20.02 yaw=0.47` นิ่งที่ทศนิยม 2 ตำแหน่ง · ไม่พบอาการ quaternion real ≈ 0 อีก (bug B1 ของ v2.1.0 หายจริง) |
+| `03_NonBlocking_Multitask` | **PASS** | `loop/s=640`, `RV reports/s=100` ตรงกับ `INTERVAL_100HZ` |
+| `04_Calibration_Tare` | **PASS** | `?` → `ME calibration status = 0 (OK)` · `z` → yaw 147.2° → -0.8° · heading err 15.9° → 2.9° |
+| `05_I2C_Euler_Compass` | **PASS** | heading + ทิศ 16 ทิศ ทำงาน (accuracy Unreliable ก่อน calibrate mag เป็นปกติ) |
+| Compile matrix | **PASS** | 9 ตัวอย่าง × 3 บอร์ด PlatformIO = **27/27** build, warning = 0 (`-Wall -Wextra`) |
+
+ยังไม่ได้ทดสอบบน MOMO: `02` (Wire1), `06` SPI, `07` UART-RVC, `08` UART-SHTP — ต้องเดินสายเพิ่ม
+
+### 12.2 B6 — ตัวอย่าง 04 เปิด RV และ Game RV พร้อมกัน (แก้แล้ว)
+
+- **อาการ:** `enableReports()` ของตัวอย่าง 04 เปิด Rotation Vector, magnetometer และ Game Rotation Vector พร้อมกัน
+- **สาเหตุ:** ทั้ง RV, Game RV, Geomagnetic RV และ ARVR variant เขียนลง `_quat` ตัวเดียวกันใน `parseInputReports()` ค่า Euler ที่พิมพ์จึงเป็นของ report ที่มาถึงทีหลัง สลับไปมาระหว่าง fusion 9 แกนกับ 6 แกน
+- **แก้:** ตัด `enableGameRotationVector()` ออกจากตัวอย่าง 04 และเขียนคอมเมนต์เตือนไว้ใน `enableReports()` (โค้ดไลบรารีไม่เปลี่ยน)
+
+### 12.3 B7 — `tareNow()` ต้องส่ง basis ให้ตรงกับ report ที่เปิดไว้
+
+- **อาการ:** ใช้ Game RV แล้วสั่ง `tareNow(TARE_AXIS_ALL)` ชิปตอบรับแต่มุมไม่ขยับเลย
+- **สาเหตุ:** ค่า default ของ `basis` คือ `TARE_BASIS_ROTATION_VECTOR` (9 แกน) ซึ่งไม่ได้เปิดใช้ ชิปจึง tare vector ที่ไม่มีใครอ่าน
+- **แก้:** ส่ง `TARE_BASIS_GAMING_RV` เมื่อใช้ Game RV → ทุกแกนเป็น 0.00 ถูกต้อง
+- **ข้อจำกัดของชิป:** `TARE_AXIS_Z` + `TARE_BASIS_GAMING_RV` ไม่มีผลใด ๆ (ทดสอบ BNO086 fw 3.12.6) ถ้าต้องตั้งศูนย์เฉพาะ yaw บน Game RV ให้หัก offset ในซอฟต์แวร์ — `PlatformIO/src/main.cpp` ทำแบบนี้
+
+### 12.4 B8 — `softReset()` ไม่ล้าง tare
+
+- **อาการ:** tare แล้วสั่ง `softReset()` มุมยังเป็น 0 ทุกแกน
+- **แก้:** ใช้ `clearTare()` (Set Reorientation เป็น identity quaternion) ซึ่งไม่เขียน flash ด้วย
+
+### 12.5 อาการ I2C ค้างเมื่อ upload ทับขณะชิปกำลังส่ง report
+
+ยืนยันสาเหตุและวิธีแก้ของ B3 (v2.1.0) เพิ่มเติมด้วยการวัดระดับสัญญาณจริง:
+
+| สภาพ | SDA | SCL | กู้ด้วย 20 clock + STOP | สแกนเจอชิป |
+|---|---|---|---|---|
+| ปกติ | 1 | 1 | — | เจอ 0x4A |
+| ชิปกด SDA ค้าง | **0** | 1 | SDA กลับเป็น 1 | ต้อง reset ชิปก่อน |
+| เซ็นเซอร์ไม่มีไฟ / สายหลุด | **0** | **0** | ไม่ได้ผล | ไม่เจอ |
+
+- ตัวกระตุ้นคือ **การ reset MCU กลางการรับส่ง I2C** ซึ่งเกิดทุกครั้งที่ upload firmware และทุกครั้งที่เปิด Serial Monitor (toggle DTR/RTS) ยิ่ง report rate สูงยิ่งเจอบ่อย (ที่ 100 Hz เจอแทบทุกครั้ง)
+- **วิธีแก้ที่ได้ผล 100%:** ต่อขา RST เข้า GPIO แล้วส่งให้ `begin()` — ทดสอบ reset กลางสตรีม 100 Hz **5/5 ครั้ง ชิปกลับมาทุกครั้ง** ทุกตัวอย่างจึงเพิ่มบรรทัดคอมเมนต์ `RST_PIN 18` ไว้ให้เปิดใช้
+- ถ้าไม่ต่อ RST: ตัดไฟเซ็นเซอร์แล้วจ่ายใหม่ (ถอด USB ~5 s) เป็นวิธีเดียวที่กู้ได้ในกรณีที่สัญญาณถูกกดค้างทั้งสองเส้น
 
 ---
 

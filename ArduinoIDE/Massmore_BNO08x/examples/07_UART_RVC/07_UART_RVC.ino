@@ -1,5 +1,5 @@
 /*
-  06_UART_RVC — Massmore_BNO08x_RVC (UART-RVC mode)
+  07_UART_RVC — Massmore_BNO08x_RVC (UART-RVC mode)
   ---------------------------------------------------------------------------
   โหมดที่ง่ายที่สุดของ BNO08x: strap ขา 2 ขา ต่อสาย 1 เส้น แล้วชิป stream
   yaw / pitch / roll + acceleration ที่ 100 Hz ตลอดเวลา โดย host ไม่ต้องส่งคำสั่ง
@@ -54,7 +54,7 @@ uint32_t dropped    = 0;
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
-  Serial.println(F("\nMassmore_BNO08x - 06_UART_RVC"));
+  Serial.println(F("\nMassmore_BNO08x - 07_UART_RVC"));
 
   // โหมดถูก latch ตอน reset: ถ้าต่อ RST ไว้ reset ชิปหนึ่งครั้ง แล้วรอให้เริ่ม stream
   if (RST_PIN >= 0) {

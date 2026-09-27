@@ -1,5 +1,5 @@
 /*
-  05_SPI_Advance — Massmore_BNO08x (SPI, high-rate)
+  06_SPI_Advance — Massmore_BNO08x (SPI, high-rate)
   ---------------------------------------------------------------------------
   SPI เหมาะกับงานอัตราสูง: ไม่มี address phase, ไม่มี clock stretching และย้าย
   SHTP cargo ทั้งชุดได้ในการ assert CS ครั้งเดียว BNO08x ใช้ SPI Mode 3
@@ -64,7 +64,7 @@ uint32_t rvCount    = 0;
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
-  Serial.println(F("\nMassmore_BNO08x - 05_SPI_Advance"));
+  Serial.println(F("\nMassmore_BNO08x - 06_SPI_Advance"));
 
   // sketch เป็นเจ้าของ SPI bus
 #if defined(ARDUINO_ARCH_ESP32)

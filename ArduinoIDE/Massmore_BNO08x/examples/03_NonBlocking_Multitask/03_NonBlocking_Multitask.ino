@@ -22,7 +22,10 @@
   #define I2C_SDA_PIN  14
   #define I2C_SCL_PIN  15
   #define INT_PIN      -1       // ไม่ต่อ INT = polling; ต่อจริงแล้วใส่เลข GPIO
-  #define RST_PIN      -1
+  #define RST_PIN      -1    // ไม่ต่อ RST
+  // #define RST_PIN      18    // แนะนำ: ต่อ RST เข้า GPIO 18 แล้วเปิดคอมเมนต์บรรทัดนี้
+                              // driver จะ reset ชิปให้ตอน begin() — กันอาการ I2C ค้าง
+                              // เมื่อ upload firmware ใหม่ทับขณะชิปกำลังส่ง report
 #elif defined(ARDUINO_ARCH_ESP32)
   #define I2C_SDA_PIN  21
   #define I2C_SCL_PIN  22

@@ -1,6 +1,6 @@
 {
   "name": "Massmore_BNO08x Factory Test (SKU-1010)",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "home_assistant_domain": null,
   "funding_url": "https://www.massmore.shop",
   "new_install_prompt_erase": true,
