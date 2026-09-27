@@ -1,9 +1,11 @@
 # Massmore_BNO08x
 
-**Massmore Halley V2 — BNO085 / BNO086 9-DOF AR/VR IMU Sensor Module (SKU-1010)**
+**Massmore Halley V2.1 — BNO085 / BNO086 9-DOF AR/VR IMU Sensor Module (SKU-1010)**
 Arduino IDE / PlatformIO driver library — **Version 2.1.1** by Massmore — *Designed and Manufactured by Massmore*
 
-![Massmore Halley V2 BNO085/BNO086](docs/images/halley-v2-product-cover.png)
+<p align="center">
+  <img src="docs/images/halley-v2.1-product-cover.webp" alt="Massmore Halley V2.1 BNO085/BNO086 9-DOF IMU Sensor" width="520">
+</p>
 
 > **เริ่มต้นเร็วที่สุด:** ต่อ Qwiic / I2C (3.3 V), เปิดตัวอย่าง `01_BasicRead`, address default `0x4A` — เรียก `readAll()` ครั้งเดียวได้ quaternion, roll/pitch/yaw, accel, gyro, mag ครบ
 
@@ -15,7 +17,7 @@ BNO085 / BNO086 เป็น 9-DOF sensor-fusion SiP ที่รวม accelero
 ภายในที่รัน CEVA SH-2 MotionEngine ไว้ในตัวเดียว เซ็นเซอร์คำนวณ orientation ให้เสร็จแล้วส่งเป็น
 quaternion / rotation vector ออกมา host MCU จึงไม่ต้องเขียน Kalman / Madgwick filter เอง
 
-**Massmore Halley V2 (SKU-1010) key specs**
+**Massmore Halley V2.1 (SKU-1010) key specs**
 
 | Item | Spec |
 |---|---|
@@ -28,6 +30,17 @@ quaternion / rotation vector ออกมา host MCU จึงไม่ต้�
 | Pull-up | SDA / SCL มี pull-up บนบอร์ด (ค่าที่ datasheet แนะนำ 2–4 kΩ) |
 | Connector | Qwiic-compatible 4-pin connector + through-hole pads |
 | Board size | ประมาณ 25.40 × 20.32 mm (ตรวจ mechanical drawing / บอร์ดจริงก่อนออกแบบ enclosure) |
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/halley-v2.1-features.webp" alt="Halley V2.1 features"><br><sub>Features — PCB สีดำ, 9-axis fusion, Qwiic ×2, 3.3 V / 5 V</sub></td>
+    <td align="center" width="50%"><img src="docs/images/halley-v2.1-bno055-vs-bno08x.webp" alt="BNO055 vs BNO085/BNO086 interface and report rate"><br><sub>BNO055 vs BNO08x — interface และ report rate</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/halley-v2.1-front-back.webp" alt="Halley V2.1 front and back"><br><sub>ด้านหน้า / ด้านหลัง — หลังบอร์ดมี solder jumper <code>PS0</code> / <code>PS1</code> (บัดกรีปิด = 1)</sub></td>
+    <td align="center" width="50%"><img src="docs/images/halley-v2.1-dimensions.webp" alt="Halley V2.1 dimensions"><br><sub>ขนาดบอร์ด 25.40 × 20.32 mm · ระยะรูยึด 20.32 × 15.24 mm</sub></td>
+  </tr>
+</table>
 
 **Library highlights**
 
@@ -65,7 +78,9 @@ quaternion / rotation vector ออกมา host MCU จึงไม่ต้�
 
 ## 2. Pinout
 
-![Massmore Halley V2 pinout](docs/images/halley-v2-pinout.png)
+<p align="center">
+  <img src="docs/images/halley-v2.1-pinout.webp" alt="Massmore Halley V2.1 pinout" width="720">
+</p>
 
 ชื่อขาคือชื่อที่พิมพ์บนบอร์ด — โค้ดและเอกสารทั้งชุดใช้ชื่อบนบอร์ดเป็นหลัก
 
@@ -93,7 +108,15 @@ quaternion / rotation vector ออกมา host MCU จึงไม่ต้�
 
 `P0` / `P1` ถูกอ่านตอนปล่อย `RST` เท่านั้น — เปลี่ยนโหมดแล้วต้อง reset
 
-![ESP32 I2C wiring](docs/images/halley-v2-esp32-i2c-wiring.png)
+หลังบอร์ดพิมพ์ตารางโหมดเป็นชื่อสั้น: `UART` = **UART-SHTP** (`P1`=1, `P0`=0) · `UART+` = **UART-RVC** (`P1`=0, `P0`=1)
+เลือกโหมดได้ทั้งต่อสายที่ pad `P0`/`P1` หรือบัดกรีปิด jumper `PS0`/`PS1` ด้านหลัง — **ยกเว้นโหมด SPI ห้ามบัดกรีปิด `PS0`** เพราะ `P0` ต้องต่อเข้า GPIO WAKE ของ MCU
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/halley-v2.1-esp32-i2c-wiring.webp" alt="Halley V2.1 ESP32 I2C wiring"><br><sub>ESP32 I2C — <code>3Vo</code>→3V3 · <code>SDA</code>→GPIO 21 · <code>SCL</code>→GPIO 22 · <code>RST</code>→GPIO 17</sub></td>
+    <td align="center" width="50%"><img src="docs/images/halley-v2.1-connection-options.webp" alt="Halley V2.1 connection options: Qwiic I2C or pin header SPI"><br><sub>แบบที่ 1 เสียบ Qwiic (I2C) · แบบที่ 2 บัดกรีขาแล้วใช้ SPI</sub></td>
+  </tr>
+</table>
 
 ---
 
