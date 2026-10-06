@@ -1,5 +1,5 @@
 /*
-  03_NonBlocking_Multitask — Massmore_BNO08x (Advanced Non-blocking FSM API)
+  04_NonBlocking_Multitask — Massmore_BNO08x (Advanced Non-blocking FSM API)
   ---------------------------------------------------------------------------
   แสดงว่า loop() ไม่ถูก block: เปิด Rotation Vector 100 Hz + Accelerometer 100 Hz
   แล้วใช้ update() / isDataReady() / getReadings() ควบคู่กับงานอื่น (LED กะพริบ
@@ -53,7 +53,7 @@ bool     ledState   = false;
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
-  Serial.println(F("\nMassmore_BNO08x - 03_NonBlocking_Multitask"));
+  Serial.println(F("\nMassmore_BNO08x - 04_NonBlocking_Multitask"));
 
   pinMode(LED_BUILTIN, OUTPUT);
 

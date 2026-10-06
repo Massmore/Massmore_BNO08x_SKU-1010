@@ -1,5 +1,5 @@
 /*
-  04_Calibration_Tare — Massmore_BNO08x
+  05_Calibration_Tare — Massmore_BNO08x
   ---------------------------------------------------------------------------
   Calibration ตามขั้นตอนของ CEVA (doc 1000-4044) และ Tare (doc 1000-4045)
   ควบคุมผ่าน Serial Monitor (115200, ส่งทีละตัวอักษร)
@@ -78,7 +78,7 @@ static void enableReports() {
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
-  Serial.println(F("\nMassmore_BNO08x - 04_Calibration_Tare"));
+  Serial.println(F("\nMassmore_BNO08x - 05_Calibration_Tare"));
 
 #if defined(ARDUINO_ARCH_ESP32)
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);

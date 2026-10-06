@@ -128,15 +128,15 @@ quaternion / rotation vector ออกมา host MCU จึงไม่ต้�
 | **ESP32 (Classic)** | Arduino-ESP32 v3.x+ (Arduino IDE Core 3.3.12 / pioarduino 55.03.311 = Core 3.3.11) | Full GPIO Matrix | None. **Primary Factory Test target.** |
 | **AVR — Arduino Nano (ATmega328P)** | Arduino AVR Core | Fixed Hardware Pins (I2C: A4/A5, SPI: D10–13, UART: D0/D1) | 2 KB SRAM / 32 KB Flash — driver ใช้ SRAM ~1 KB (packet buffer ลดเหลือ 128 byte อัตโนมัติ) ใช้ Simple API, หลีกเลี่ยง buffer ใหญ่ใน sketch. 5 V logic — ต่อได้เฉพาะ `SDA`/`SCL` (มี level shifter); ขา `INT`/`RST`/`DI`/`CS`/`P0`/`P1` ต้องผ่าน level shifter. |
 
-**Hardware-tested** (BNO086 FW 3.12.6 part 10004563) — ESP32 DevKit: 2026-09-22 ผ่าน Arduino IDE (Arduino-ESP32 2.0.17) · ESP32-S3 MOMO: 2026-09-27 ผ่าน PlatformIO (pioarduino 55.03.311 = Core 3.3.11)
+**Hardware-tested** (BNO086 FW 3.12.6 part 10004563) — ESP32 DevKit: 2026-09-22 ผ่าน Arduino IDE (Arduino-ESP32 2.0.17) · ESP32-S3 MOMO: 2026-09-27 ผ่าน PlatformIO (pioarduino 55.03.311 = Core 3.3.11) · ตัวอย่าง 03 บน ESP32 DevKit: 2026-10-06 ผ่าน PlatformIO (Core 3.3.11) รันต่อเนื่อง 5 นาทีไม่ค้าง
 
 | MCU | I2C | SPI | UART-SHTP | UART-RVC |
 |---|---|---|---|---|
-| ESP32 DevKit | PASS (01–04, 08) | PASS ~400 Hz | PASS | PASS |
-| ESP32-S3 MOMO | PASS (01, 03, 04, 05, 09) | — | — | — |
+| ESP32 DevKit | PASS (01–05, 09) | PASS ~400 Hz | PASS | PASS |
+| ESP32-S3 MOMO | PASS (01, 04, 05, 06, 10) | — | — | — |
 | Arduino Nano | compile only | compile only | ไม่รองรับ (3 Mbaud) | compile only |
 
-Compile matrix (v2.1.1): 9 ตัวอย่าง × 3 บอร์ด — **PlatformIO (`esp32dev`, `esp32-s3-devkitc-1`, `nano`) 27/27 build ไม่มี warning** (`-Wall -Wextra`) · Arduino IDE ใช้ไลบรารีและตัวอย่างชุดเดียวกัน (ESP32 Core 3.3.12, AVR 1.8.8)
+Compile matrix (v2.1.1): 10 ตัวอย่าง × 3 บอร์ด — **PlatformIO (`esp32dev`, `esp32-s3-devkitc-1`, `nano`) 30/30 build ไม่มี warning** (`-Wall -Wextra`) · Arduino IDE ใช้ไลบรารีและตัวอย่างชุดเดียวกัน (ESP32 Core 3.3.12, AVR 1.8.8)
 คอร์อื่น (RP2040, STM32) ไม่มี platform-specific code จึงน่าจะ compile ได้ แต่ **ไม่ได้ทดสอบและไม่รับประกัน**
 
 ---
@@ -298,13 +298,14 @@ imu.begin(0x4A, Wire, /*INT*/ 2);   // INT ผ่าน level shifter (Nano เ�
 |---|---|---|
 | 01 | `01_BasicRead` | Simple Blocking API — `readAll()` พิมพ์ทุกค่า (I2C default) |
 | 02 | `02_CustomPins_BusRemap` | ESP32 / S3: `Wire1` บนขาที่เลือกเอง (Core 3.x) · Nano: A4/A5 fixed |
-| 03 | `03_NonBlocking_Multitask` | FSM API + LED blink + loop counter — แสดงว่า `loop()` ไม่ถูก block |
-| 04 | `04_Calibration_Tare` | calibration ตามขั้นตอน CEVA พร้อมคำแนะนำ step-by-step บน Serial (MOVE THE BOARD → READY → save), Save DCD, tare / persist / clear |
-| 05 | `05_I2C_Euler_Compass` | **ใหม่** — Euler angles (roll / pitch / yaw) + เข็มทิศ tilt-compensated 0..360° / 16 ทิศ + ความแม่นยำ heading (I2C) |
-| 06 | `06_SPI_Advance` | SPI Mode 3 @ 3 MHz, Rotation Vector 400 Hz + วัดอัตราจริง |
-| 07 | `07_UART_RVC` | โหมด UART-RVC 100 Hz แบบสายเส้นเดียว (`Massmore_BNO08x_RVC`) |
-| 08 | `08_UART_Mode` | SHTP-over-UART 3 Mbit/s (`beginUART()`) — API เต็มเหมือน I2C · ESP32 / S3 เท่านั้น |
-| 09 | `09_Factory_Test` | **Outgoing QA** — bus scan, Product ID, serial, authenticity, range check, continuous read → `#VERDICT` |
+| 03 | `03_GameRotationVector_Euler` | **ใหม่** — roll / pitch / yaw ด้วย Game Rotation Vector (6 แกน ไม่ใช้ mag) ไม่ต้อง calibrate · ตั้งศูนย์ `z` / `a` / `r` (I2C) |
+| 04 | `04_NonBlocking_Multitask` | FSM API + LED blink + loop counter — แสดงว่า `loop()` ไม่ถูก block |
+| 05 | `05_Calibration_Tare` | calibration ตามขั้นตอน CEVA พร้อมคำแนะนำ step-by-step บน Serial (MOVE THE BOARD → READY → save), Save DCD, tare / persist / clear |
+| 06 | `06_I2C_Euler_Compass` | Euler angles (roll / pitch / yaw) + เข็มทิศ tilt-compensated 0..360° / 16 ทิศ + ความแม่นยำ heading (I2C) |
+| 07 | `07_SPI_Advance` | SPI Mode 3 @ 3 MHz, Rotation Vector 400 Hz + วัดอัตราจริง |
+| 08 | `08_UART_RVC` | โหมด UART-RVC 100 Hz แบบสายเส้นเดียว (`Massmore_BNO08x_RVC`) |
+| 09 | `09_UART_Mode` | SHTP-over-UART 3 Mbit/s (`beginUART()`) — API เต็มเหมือน I2C · ESP32 / S3 เท่านั้น |
+| 10 | `10_Factory_Test` | **Outgoing QA** — bus scan, Product ID, serial, authenticity, range check, continuous read → `#VERDICT` |
 
 ทุกตัวอย่างไม่มี dependency ภายนอก และ build ผ่านทั้ง `esp32dev`, `esp32-s3-devkitc-1`, `nano`
 
@@ -312,7 +313,7 @@ imu.begin(0x4A, Wire, /*INT*/ 2);   // INT ผ่าน level shifter (Nano เ�
 
 ## 9. Factory Test & Web Serial Monitor
 
-`09_Factory_Test` รันเองหลังบูตและพิมพ์ผลแบบ machine-parsable ที่ 115200:
+`10_Factory_Test` รันเองหลังบูตและพิมพ์ผลแบบ machine-parsable ที่ 115200:
 
 ```text
 #MASSMORE_FACTORY_TEST v1.0

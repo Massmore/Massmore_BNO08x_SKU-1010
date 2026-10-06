@@ -1,6 +1,6 @@
 # Massmore_BNO08x — Factory Test Firmware
 
-เฟิร์มแวร์ที่ compile แล้วของตัวอย่าง [`09_Factory_Test`](../ArduinoIDE/Massmore_BNO08x/examples/09_Factory_Test/)
+เฟิร์มแวร์ที่ compile แล้วของตัวอย่าง [`10_Factory_Test`](../ArduinoIDE/Massmore_BNO08x/examples/10_Factory_Test/)
 สำหรับ **ESP32 (Classic) DevKit — Primary Factory Test MCU** ใช้ตรวจบอร์ด Massmore BNO08x SKU-1010
 ก่อนส่งลูกค้า (Outgoing QA/QC) และให้ **Massmore Web Serial Monitor** อ่านผลอัตโนมัติ
 
@@ -82,7 +82,7 @@ esptool.py --chip esp32 --port /dev/cu.usbserial-0001 --baud 921600 \
 ผลจริงจากบอร์ด Massmore BNO08x (ชิป BNO086) บน ESP32 DevKit — flash ไฟล์ merged ที่ `0x0` แล้วเปิด Serial 115200 (ทดสอบจริง 2026-09-22 — บรรทัด `Library` แสดงเวอร์ชันของไฟล์ bin ปัจจุบัน):
 
 ```text
-Massmore_BNO08x - 09_Factory_Test (keep the board still)
+Massmore_BNO08x - 10_Factory_Test (keep the board still)
 
 #MASSMORE_FACTORY_TEST v1.0
 #PRODUCT Massmore_BNO08x
@@ -111,7 +111,7 @@ Type 'r' + Enter to run the test again.
 ```
 
 - `#CHIP` (`BNO085` / `BNO086` / `BNO08x`) เป็นข้อมูลเท่านั้น ไม่ใช่เงื่อนไข PASS/FAIL — parser ของเว็บต้องข้ามบรรทัดที่ไม่รู้จักได้
-- ค่า `RANGE_*` ขึ้นกับตำแหน่งวางบอร์ดและสนามแม่เหล็กรอบตัว — ดูเกณฑ์ใน `09_Factory_Test.ino`
+- ค่า `RANGE_*` ขึ้นกับตำแหน่งวางบอร์ดและสนามแม่เหล็กรอบตัว — ดูเกณฑ์ใน `10_Factory_Test.ino`
 - ถ้า MCU ถูก reset ขณะชิปกำลังส่งข้อมูล ชิปอาจกด SDA/SCL ค้าง → `BUS_SCAN FAIL` ให้ถอดไฟเซ็นเซอร์แล้วทดสอบใหม่
 
 ## Rebuild
@@ -131,6 +131,6 @@ cp .pio/build/esp32dev/firmware.bin         ../firmware/bin/Massmore_BNO08x_Fact
 
 ```bash
 arduino-cli compile -b esp32:esp32:esp32 --library ArduinoIDE/Massmore_BNO08x \
-  --build-path build/fw ArduinoIDE/Massmore_BNO08x/examples/09_Factory_Test
-# build/fw/09_Factory_Test.ino.merged.bin = merged image สำหรับ offset 0x0 (Core 3.x สร้างให้เอง)
+  --build-path build/fw ArduinoIDE/Massmore_BNO08x/examples/10_Factory_Test
+# build/fw/10_Factory_Test.ino.merged.bin = merged image สำหรับ offset 0x0 (Core 3.x สร้างให้เอง)
 ```

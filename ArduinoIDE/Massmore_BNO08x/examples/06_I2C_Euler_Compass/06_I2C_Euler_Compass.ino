@@ -1,5 +1,5 @@
 /*
-  05_I2C_Euler_Compass — Massmore_BNO08x (Euler angles + เข็มทิศ tilt-compensated)
+  06_I2C_Euler_Compass — Massmore_BNO08x (Euler angles + เข็มทิศ tilt-compensated)
   ---------------------------------------------------------------------------
   อ่าน Rotation Vector (9-axis: accel + gyro + mag) ผ่าน I2C แล้วแสดง
     - Euler angles: roll / pitch / yaw เป็นองศา
@@ -16,7 +16,7 @@
 
   Calibration: ครั้งแรกหลังเปิดเครื่อง accuracy จะเป็น UNRELIABLE / LOW และ heading ยังไม่ชี้เหนือจริง
   หยิบบอร์ดหมุนเป็นเลข 8 ในอากาศ (ทุกแกน) ประมาณ 10–20 วินาที จนขึ้น MEDIUM / HIGH
-  อยู่ห่างโลหะ / แม่เหล็ก / มอเตอร์ / สายไฟกระแสสูง (ดู 04_Calibration_Tare สำหรับ Save DCD)
+  อยู่ห่างโลหะ / แม่เหล็ก / มอเตอร์ / สายไฟกระแสสูง (ดู 05_Calibration_Tare สำหรับ Save DCD)
 
   Wiring (I2C) — ชื่อขาตามที่พิมพ์บนบอร์ด Massmore Halley V2
     Halley V2      ESP32 (Classic)   ESP32-S3 (MOMO) Arduino Nano
@@ -93,7 +93,7 @@ void printPadded(float v, uint8_t width, uint8_t decimals) {
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
-  Serial.println(F("\nMassmore_BNO08x - 05_I2C_Euler_Compass"));
+  Serial.println(F("\nMassmore_BNO08x - 06_I2C_Euler_Compass"));
 
   // sketch เป็นเจ้าของ bus: เรียก Wire.begin() เองแล้วส่ง reference เข้าไลบรารี
 #if defined(ARDUINO_ARCH_ESP32)

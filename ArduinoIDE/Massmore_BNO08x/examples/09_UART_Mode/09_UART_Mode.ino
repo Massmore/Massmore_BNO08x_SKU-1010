@@ -1,9 +1,9 @@
 /*
-  08_UART_Mode — Massmore_BNO08x (SHTP over UART, 3 Mbit/s)
+  09_UART_Mode — Massmore_BNO08x (SHTP over UART, 3 Mbit/s)
   ---------------------------------------------------------------------------
   โหมด UART เต็มรูปแบบ: ใช้ API เดียวกับ I2C / SPI ทุกอย่าง (readAll, enable*,
   calibration, tare, Product ID, isGenuine) แค่เปลี่ยน begin() เป็น beginUART()
-  ต่างจาก 07_UART_RVC ที่ได้แค่ yaw/pitch/roll + accel และสั่งงานชิปไม่ได้
+  ต่างจาก 08_UART_RVC ที่ได้แค่ yaw/pitch/roll + accel และสั่งงานชิปไม่ได้
 
   WIRING — โหมดถูก latch ตอน reset (ต่อ RST ไว้ driver จะ reset ให้เอง)
     Halley V2       ESP32 (Classic)   ESP32-S3 (MOMO)
@@ -18,7 +18,7 @@
     INT         ->  GPIO 4            -          (ไม่บังคับ)
 
   UART 3,000,000 baud 8N1 ตาม datasheet — Arduino Nano ทำความเร็วนี้ไม่ได้
-  (ใช้ 07_UART_RVC ที่ 115200 แทน) ตัวอย่างนี้จึงรองรับเฉพาะ ESP32 / ESP32-S3
+  (ใช้ 08_UART_RVC ที่ 115200 แทน) ตัวอย่างนี้จึงรองรับเฉพาะ ESP32 / ESP32-S3
 
   Designed and Manufactured by Massmore — https://www.massmore.shop
 */
@@ -51,7 +51,7 @@ HardwareSerial &imuSerial = Serial2;
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
-  Serial.println(F("\nMassmore_BNO08x - 08_UART_Mode"));
+  Serial.println(F("\nMassmore_BNO08x - 09_UART_Mode"));
 
   // sketch เป็นเจ้าของ UART: ขยาย RX buffer ก่อน begin() เพราะ advertisement ยาว ~290 byte
   imuSerial.setRxBufferSize(1024);
@@ -112,8 +112,8 @@ void loop() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println(F("\nMassmore_BNO08x - 08_UART_Mode"));
-  Serial.println(F("SHTP-over-UART needs 3 Mbit/s: ESP32 / ESP32-S3 only. Use 07_UART_RVC on this board."));
+  Serial.println(F("\nMassmore_BNO08x - 09_UART_Mode"));
+  Serial.println(F("SHTP-over-UART needs 3 Mbit/s: ESP32 / ESP32-S3 only. Use 08_UART_RVC on this board."));
 }
 
 void loop() { }

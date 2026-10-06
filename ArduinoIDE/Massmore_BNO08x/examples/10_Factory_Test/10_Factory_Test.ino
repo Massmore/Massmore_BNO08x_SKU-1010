@@ -1,5 +1,5 @@
 /*
-  09_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
+  10_Factory_Test — Massmore_BNO08x (Outgoing QA / QC)
   ---------------------------------------------------------------------------
   ใช้ตรวจบอร์ด Massmore BNO08x SKU-1010 ก่อนส่งลูกค้า และให้เว็บ
   Massmore Web Serial Monitor อ่านผลอัตโนมัติ — รันเองทันทีหลังบูต
@@ -276,7 +276,7 @@ void setup() {
 #endif
   Wire.setClock(FT_I2C_HZ);
 
-  Serial.println(F("\nMassmore_BNO08x - 09_Factory_Test (keep the board still)"));
+  Serial.println(F("\nMassmore_BNO08x - 10_Factory_Test (keep the board still)"));
   runFactoryTest();
 }
 

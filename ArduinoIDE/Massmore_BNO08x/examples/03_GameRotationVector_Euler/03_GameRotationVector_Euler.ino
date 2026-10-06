@@ -1,4 +1,3 @@
-#include <Arduino.h>
 /*
   03_GameRotationVector_Euler — Massmore_BNO08x (วัดมุมด้วย Game Rotation Vector)
   ---------------------------------------------------------------------------
